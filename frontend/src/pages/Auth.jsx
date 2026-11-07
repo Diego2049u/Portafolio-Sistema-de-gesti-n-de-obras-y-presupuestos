@@ -21,7 +21,6 @@ export default function Auth() {
     email: '',
     password: '',
     confirmPassword: '',
-    role: 'operaciones',
   });
 
   const handleLoginSubmit = (e) => {
@@ -296,23 +295,6 @@ export default function Auth() {
                       </span>
                     </button>
                   </div>
-                </div>
-
-                <div className="flex flex-col gap-1">
-                  <label htmlFor="reg-role" className="font-label-sm text-label-sm text-on-surface-variant">
-                    ROL SOLICITADO
-                  </label>
-                  <select
-                    id="reg-role"
-                    value={registerData.role}
-                    onChange={(e) => setRegisterData({ ...registerData, role: e.target.value })}
-                    className="w-full bg-surface-container-low focus:bg-surface-container-lowest text-on-surface font-body-md text-body-md px-3 py-2 rounded-lg focus:outline-none"
-                  >
-                    <option value="operaciones">Técnico de Terreno</option>
-                    <option value="supervisor">Supervisor de Obra</option>
-                    <option value="finanzas">Control Presupuestario</option>
-                    <option value="adquisiciones">Gestión Bodega / Insumos</option>
-                  </select>
                 </div>
 
                 <button

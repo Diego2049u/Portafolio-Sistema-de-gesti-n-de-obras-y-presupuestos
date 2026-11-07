@@ -1,4 +1,5 @@
-import Auth from './components/Auth'
+import Auth from './pages/Auth'
+
 
 function App() {
   return (

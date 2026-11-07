@@ -1,0 +1,51 @@
+export const NAV_ITEMS = [
+  {
+    id: 'dashboard',
+    label: 'Dashboard Gerencial',
+    path: '/dashboard',
+    icon: 'monitoring',
+    roles: ['gerencia'],
+  },
+  {
+    id: 'obras',
+    label: 'Obras y Proyectos',
+    path: '/obras',
+    icon: 'construction',
+    roles: ['gerencia', 'finanzas', 'supervisor', 'tecnico'],
+  },
+  {
+    id: 'presupuestos',
+    label: 'Presupuestos y Costos',
+    path: '/presupuestos',
+    icon: 'request_quote',
+    roles: ['gerencia', 'finanzas', 'supervisor'],
+  },
+  {
+    id: 'materiales',
+    label: 'Costos y Materiales de Obra',
+    path: '/materiales',
+    icon: 'inventory_2',
+    roles: ['gerencia', 'finanzas', 'supervisor'],
+  },
+  {
+    id: 'facturacion',
+    label: 'Facturación y Cobranza',
+    path: '/facturacion',
+    icon: 'payments',
+    roles: ['gerencia', 'finanzas'],
+  },
+  {
+    id: 'clientes',
+    label: 'Clientes y Contratos',
+    path: '/clientes',
+    icon: 'group',
+    roles: ['gerencia', 'finanzas', 'supervisor'],
+  },
+  {
+    id: 'rbac',
+    label: 'Configuración / RBAC',
+    path: '/rbac',
+    icon: 'admin_panel_settings',
+    roles: ['gerencia'],
+  },
+];

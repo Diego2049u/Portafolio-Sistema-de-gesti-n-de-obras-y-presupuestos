@@ -1,1 +1,8 @@
 # FLYAG MVP
+
+## frontend
+
+
+## backend
+ 
+

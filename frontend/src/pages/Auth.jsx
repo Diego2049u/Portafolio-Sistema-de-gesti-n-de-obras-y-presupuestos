@@ -200,7 +200,7 @@ export default function Auth() {
                     verified_user
                   </span>
                   <p className="font-body-sm text-body-sm text-on-surface">
-                    Las credenciales se activarán tras la validación de Contraloría Interna bajo estándares RBAC.
+                    La cuenta quedará inactiva hasta que Gerencia la apruebe en el módulo de Auditoría.
                   </p>
                 </div>
 

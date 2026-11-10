@@ -45,7 +45,7 @@ const CLASE_ESTADO = {
   bloqueado: 'bg-error-container text-on-error-container',
 };
 
-export default function Auditoria() {
+export default function Auditoria({ userRole = 'GERENCIA' }) {
   const [pestanaActiva, setPestanaActiva] = useState('users');
   const [busqueda, setBusqueda] = useState('');
   const [filtroEstado, setFiltroEstado] = useState('todos');
@@ -67,6 +67,10 @@ export default function Auditoria() {
   const totalPaginas = Math.max(1, Math.ceil(usuariosFiltrados.length / filasPorPagina));
   const paginaActual = Math.min(pagina, totalPaginas);
   const usuariosPagina = usuariosFiltrados.slice((paginaActual - 1) * filasPorPagina, paginaActual * filasPorPagina);
+
+  if (userRole !== 'GERENCIA') {
+    return <div className="p-8 text-center text-secondary">Acceso restringido: esta vista es exclusiva de Gerencia.</div>;
+  }
 
   const abrirAprobacion = (usuario) => {
     setUsuarioSeleccionado(usuario);

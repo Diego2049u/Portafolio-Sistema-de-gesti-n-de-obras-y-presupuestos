@@ -8,6 +8,7 @@ import CostosMateriales from './pages/CostosMateriales';
 import FacturacionCobranza from './pages/FacturacionCobranza';
 import ClientesContratos from './pages/ClientesContratos';
 import Auditoria from './pages/Auditoria';
+import Tecnicos from './pages/Tecnicos';
 import Layout from './components/layout';
 import { ROLES } from './config/navegacion';
 
@@ -46,6 +47,8 @@ export default function App() {
         return <ClientesContratos userRole={user.role} />;
       case 'auditoria':
         return <Auditoria userRole={user.role} />;
+      case 'tecnicos':
+        return <Tecnicos userRole={user.role} />;
       default:
         return <Dashboard userRole={user.role} />;
     }

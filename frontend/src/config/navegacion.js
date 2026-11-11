@@ -55,6 +55,13 @@ export const NAV_ITEMS = [
     roles: [ROLES.GERENCIA, ROLES.FINANZAS, ROLES.SUPERVISOR]
   },
   {
+    id: 'tecnicos',
+    label: 'Disponibilidad Técnicos',
+    icon: 'engineering',
+    path: '/tecnicos',
+    roles: [ROLES.GERENCIA, ROLES.SUPERVISOR]
+  },
+  {
     id: 'auditoria',
     label: 'Configuración / RBAC',
     icon: 'admin_panel_settings',

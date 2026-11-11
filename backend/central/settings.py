@@ -37,13 +37,16 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    # Implementacion de JWT
+    # Implementacion de JWT y Terceros
     'rest_framework',
     'rest_framework_simplejwt',
+    'corsheaders',
+    'api',
 
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -72,17 +75,31 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'central.wsgi.application'
 
+CORS_ALLOW_ALL_ORIGINS = True # O restringir a http://localhost:5173
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-# se usara postgresql
+# Configuración Base de Datos PostgreSQL
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
+
+"""DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'fyag_erp_db',
+        'USER': 'postgres',
+        'PASSWORD': '123', # Momentanea ante cambio seguro a futuro
+        'HOST': 'localhost',
+        'PORT': '5432',
+    }
+}"""
+
+AUTH_USER_MODEL = 'api.Usuario'
 
 
 # Password validation

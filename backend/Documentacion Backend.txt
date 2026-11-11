@@ -1,0 +1,97 @@
+================================================================================
+           DOCUMENTACIÓN TÉCNICA Y HANDOVER - BACKEND CORE (FYAG SpA ERP)
+================================================================================
+
+1. DESCRIPCIÓN GENERAL DEL MÓDULO
+--------------------------------------------------------------------------------
+Este backend implementa la lógica central del sistema ERP para FYAG SpA,
+desarrollado con Python 3.10+ y Django REST Framework (DRF). Proveerá servicios
+API REST para la gestión de usuarios por roles, clientes, presupuestos con 
+exportación PDF, control operativo de obras, costos, facturación/pagos y 
+movimientos de inventario en bodega.
+
+--------------------------------------------------------------------------------
+2. REQUISITOS PREVIOS Y DEPENDENCIAS (`requirements.txt`)
+--------------------------------------------------------------------------------
+Las dependencias requeridas para levantar el entorno backend son:
+
+- Django >= 4.2, < 5.0
+- djangorestframework (Construcción de API REST)
+- djangorestframework-simplejwt (Autenticación JWT)
+- django-cors-headers (Middleware de CORS para integración con React)
+- psycopg2-binary (Adaptador para PostgreSQL 15+)
+- reportlab (Generación de reportes y presupuestos en PDF)
+
+Comando para instalar dependencias:
+  pip install -r requirements.txt
+
+--------------------------------------------------------------------------------
+3. ARQUITECTURA DE DATOS Y REGLAS DE NEGOCIO IMPLEMENTADAS
+--------------------------------------------------------------------------------
+a) Modelo de Usuario Personalizado (`AUTH_USER_MODEL = 'api.Usuario'`)
+   - Soporte para roles de negocio: GERENCIA, FINANZAS, SUPERVISOR, TECNICO.
+   - Estados de cuenta: pendiente, activo, bloqueado.
+
+b) Motor de Reglas de Negocio - Cierre de Obras (RF-07)
+   - Implementado en `api/services.py` (función `validar_cierre_obra`).
+   - Bloquea automáticamente la transición del estado de una Obra a 'finalizada'
+     si existen Facturas con saldo pendiente de cobro (`estado_pago != 'PAGADO'`).
+
+c) Control de Bodega & Inventario (Cardex)
+   - Implementado en `api/services.py` (función `registrar_egreso_bodega`).
+   - Controlo automático de descuento de stock, validación de stock crítico y 
+     registro de trazabilidad (`MovimientoBodega`).
+
+d) Generador de Reportes PDF
+   - Servicio ubicado en `api/pdf_generator.py`.
+   - Genera documentos oficiales en PDF para presupuestos/cotizaciones con el 
+     membrete de FYAG SpA.
+
+--------------------------------------------------------------------------------
+4. ENDPOINTS API DISPONIBLES (`/api/`)
+--------------------------------------------------------------------------------
+- POST /api/token/                : Obtención de JWT (Access & Refresh token)
+- POST /api/token/refresh/        : Refresco de JWT token
+- GET/POST /api/usuarios/         : CRUD de usuarios y roles
+- GET/POST /api/clientes/         : Registro de clientes mandantes
+- GET/POST /api/presupuestos/     : Gestión de presupuestos
+- GET /api/presupuestos/{id}/exportar-pdf/ : Descarga dinámica en PDF
+- GET/POST /api/obras/            : Control operativo (aplica regla RF-07 en UPDATE)
+- GET/POST /api/costos/           : Registros de costos de materiales
+- GET/POST /api/facturas/         : Control de facturación y saldos
+- GET/POST /api/pagos/            : Registro de pagos por obra/factura
+- GET/POST /api/materiales/       : Catálogo e inventario de bodega
+- GET/POST /api/movimientos-bodega/: Registro de ingresos y egresos a faena
+
+--------------------------------------------------------------------------------
+5. INSTRUCCIONES PARA LA BASE DE DATOS (POSTGRESQL)
+--------------------------------------------------------------------------------
+Paso 1: Configurar credenciales en `central/settings.py` en el bloque `DATABASES`:
+
+   DATABASES = {
+       'default': {
+           'ENGINE': 'django.db.backends.postgresql',
+           'NAME': 'fyag_erp_db',
+           'USER': '<DB_USER>',
+           'PASSWORD': '<DB_PASSWORD>',
+           'HOST': '<DB_HOST>',
+           'PORT': '5432',
+       }
+   }
+
+Paso 2: Ejecutar las migraciones en la terminal dentro de `backend/`:
+
+   python manage.py makemigrations api
+   python manage.py migrate
+
+Paso 3: Crear usuario administrador inicial:
+
+   python manage.py createsuperuser
+
+Paso 4: Iniciar servidor de desarrollo:
+
+   python manage.py runserver
+
+================================================================================
+Documento preparado por: Cristóbal
+================================================================================

@@ -13,6 +13,7 @@ class Command(BaseCommand):
         'Proyecto eléctrico',
         'Emergencia',
         'Garantía',
+        'Venta de repuestos',
         'Mejoras',
     ]
 

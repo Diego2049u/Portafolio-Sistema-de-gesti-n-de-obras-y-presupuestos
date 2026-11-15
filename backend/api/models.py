@@ -1,10 +1,11 @@
 from django.contrib.auth.models import AbstractUser, UserManager
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 
 
 class SoftDeleteQuerySet(models.QuerySet):
+    @transaction.atomic
     def delete(self):
         active = list(self.filter(deleted_at__isnull=True))
         count = len(active)

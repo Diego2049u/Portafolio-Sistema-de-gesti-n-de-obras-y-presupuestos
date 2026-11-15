@@ -95,3 +95,7 @@ Paso 4: Iniciar servidor de desarrollo:
 ================================================================================
 Documento preparado por: Cristóbal
 ================================================================================
+
+ACTUALIZACIÓN DE ALCANCE DEL MVP
+===============================
+Para el contrato vigente de endpoints, roles, workflows, borrado lógico y auditoría, consultar `backend/API MVP.txt`. Esa actualización excluye inventario/Cardex del alcance actual. La sección original de dependencias y base de datos permanece sin cambios y debe alinearse por el responsable de esa tarea.

@@ -9,6 +9,36 @@ export const ROLES = {
   ADMIN: 'GERENCIA'
 };
 
+const ROLE_ALIASES = {
+  ADMIN: ROLES.GERENCIA,
+  ADMINISTRADOR: ROLES.GERENCIA,
+  GERENTE: ROLES.GERENCIA,
+};
+
+export function normalizeRole(role) {
+  const value = String(role ?? '').trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+  return ROLE_ALIASES[value] || value;
+}
+
+export function getAllowedItems(role) {
+  const normalizedRole = normalizeRole(role);
+  return NAV_ITEMS.filter((item) => item.roles.some((itemRole) => normalizeRole(itemRole) === normalizedRole));
+}
+
+export function getDefaultPath(role) {
+  return getAllowedItems(role)[0]?.path || null;
+}
+
+export function getRoleLabel(role) {
+  const normalizedRole = normalizeRole(role);
+  return {
+    [ROLES.GERENCIA]: 'Gerencia / Admin General',
+    [ROLES.FINANZAS]: 'Finanzas',
+    [ROLES.SUPERVISOR]: 'Supervisor de Obras',
+    [ROLES.TECNICO]: 'Técnico',
+  }[normalizedRole] || 'Rol sin asignar';
+}
+
 // Las rutas y roles se centralizan aquí para que el Sidebar y la aplicación
 // compartan una única definición de navegación y permisos RBAC.
 export const NAV_ITEMS = [
@@ -31,7 +61,7 @@ export const NAV_ITEMS = [
     label: 'Presupuestos y Costos',
     icon: 'request_quote',
     path: '/presupuestos',
-    roles: [ROLES.GERENCIA, ROLES.FINANZAS, ROLES.SUPERVISOR]
+    roles: [ROLES.GERENCIA, ROLES.FINANZAS]
   },
   {
     id: 'costos',
@@ -63,8 +93,8 @@ export const NAV_ITEMS = [
   },
   {
     id: 'auditoria',
-    label: 'Configuración / RBAC',
-    icon: 'admin_panel_settings',
+    label: 'Auditoría del sistema',
+    icon: 'history',
     path: '/auditoria',
     roles: [ROLES.GERENCIA]
   }

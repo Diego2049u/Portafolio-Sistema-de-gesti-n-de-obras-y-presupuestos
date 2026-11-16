@@ -1,8 +1,8 @@
 import { NavLink } from 'react-router-dom';
 import flyagLogo from '../assets/flyag-logo-pag.png';
-import { getAllowedItems, ROLES } from '../config/navegacion';
+import { getAllowedItems } from '../config/navegacion';
 
-export default function Sidebar({ userRole = ROLES.GERENCIA }) {
+export default function Sidebar({ userRole }) {
   const items = getAllowedItems(userRole);
 
   return (

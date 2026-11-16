@@ -146,7 +146,7 @@ class PresupuestoSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'cliente': 'El cliente tiene deshabilitada la emisión de presupuestos y documentos de cobro.'})
         if contrato and contrato.cliente_id != cliente.pk:
             raise serializers.ValidationError({'contrato': 'El contrato debe pertenecer al mismo cliente del presupuesto.'})
-        validated_data['numero_presupuesto'] = f'TMP-{uuid.uuid4().hex}'
+        validated_data['numero_presupuesto'] = f'TMP-{uuid.uuid4().hex[:20]}'
         presupuesto = Presupuesto.objects.create(**validated_data)
         presupuesto.numero_presupuesto = f'PRE-{timezone.localdate().year}-{presupuesto.pk:06d}'
         presupuesto.save(update_fields=['numero_presupuesto', 'updated_at'])
@@ -205,6 +205,7 @@ class PresupuestoSerializer(serializers.ModelSerializer):
 class ObraSerializer(serializers.ModelSerializer):
     tecnico_nombre = serializers.CharField(source='tecnico_responsable.get_full_name', read_only=True)
     cliente_nombre = serializers.CharField(source='presupuesto.cliente.razon_social', read_only=True)
+    cliente_id = serializers.IntegerField(source='presupuesto.cliente_id', read_only=True)
     categoria_servicio_nombre = serializers.CharField(source='clasificacion_servicio.nombre', read_only=True)
     estado_operativo = serializers.CharField(read_only=True)
     estado_comercial = serializers.CharField(read_only=True)
@@ -218,7 +219,7 @@ class ObraSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def create(self, validated_data):
-        validated_data['codigo_obra'] = f'TMP-{uuid.uuid4().hex}'
+        validated_data['codigo_obra'] = f'TMP-{uuid.uuid4().hex[:20]}'
         obra = super().create(validated_data)
         obra.codigo_obra = f'OBR-{timezone.localdate().year}-{obra.pk:06d}'
         obra.save(update_fields=['codigo_obra', 'updated_at'])
@@ -347,7 +348,7 @@ class FacturaSerializer(serializers.ModelSerializer):
             validated_data['obra'] = obra
             # Revalidate under the work-row lock to prevent concurrent overbilling.
             self.validate(validated_data)
-            validated_data['numero_factura'] = f'TMP-{uuid.uuid4().hex}'
+            validated_data['numero_factura'] = f'TMP-{uuid.uuid4().hex[:20]}'
             return self._create_factura(validated_data)
 
     def _create_factura(self, validated_data):

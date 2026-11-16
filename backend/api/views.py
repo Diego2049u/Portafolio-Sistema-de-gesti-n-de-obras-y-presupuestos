@@ -3,10 +3,12 @@ from django.db import transaction
 from django.core.cache import cache
 from django.core.serializers.json import DjangoJSONEncoder
 from django.http import HttpResponse
+from django.utils.dateparse import parse_date
 import hashlib
 import json
 from rest_framework import viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -31,6 +33,23 @@ from .services import (
     registrar_nota_credito, reabrir_obra, revertir_pago, transicionar_obra,
 )
 from .pdf_generador import generar_pdf_presupuesto
+
+
+def _apply_date_range(queryset, params, field):
+    """Apply the shared `desde`/`hasta` YYYY-MM-DD query contract."""
+    bounds = {}
+    for key, lookup in (('desde', 'gte'), ('hasta', 'lte')):
+        raw = params.get(key)
+        if not raw:
+            continue
+        value = parse_date(raw)
+        if value is None:
+            raise ValidationError({key: 'Use el formato de fecha YYYY-MM-DD.'})
+        bounds[f'{field}__{lookup}'] = value
+    if 'desde' in params and 'hasta' in params and bounds:
+        if bounds.get(f'{field}__gte') and bounds.get(f'{field}__lte') and bounds[f'{field}__gte'] > bounds[f'{field}__lte']:
+            raise ValidationError({'desde': 'La fecha inicial debe ser anterior o igual a la fecha final.'})
+    return queryset.filter(**bounds) if bounds else queryset
 
 
 class AuditedModelViewSet(viewsets.ModelViewSet):
@@ -59,6 +78,7 @@ class AuditedModelViewSet(viewsets.ModelViewSet):
             ObraEstadoHistorial.objects.create(obra=instance, estado_anterior='', estado_nuevo=instance.estado_operativo, usuario=self.request.user, observacion='Estado inicial')
         registrar_evento(usuario=self.request.user, modulo=self.module_name, accion='crear', resultado='exito', detalle=f"Registro creado: {instance}.", entidad=instance.__class__.__name__, entidad_id=instance.pk, valores_nuevos=self.snapshot_instance(instance))
 
+    @transaction.atomic
     def perform_update(self, serializer):
         instance = serializer.instance
         anterior = self.snapshot_instance(instance)
@@ -67,6 +87,7 @@ class AuditedModelViewSet(viewsets.ModelViewSet):
         instance = serializer.save(**actor_values)
         registrar_evento(usuario=self.request.user, modulo=self.module_name, accion='actualizar', resultado='exito', detalle=f"Registro actualizado: {instance}.", entidad=instance.__class__.__name__, entidad_id=instance.pk, valores_anteriores=anterior, valores_nuevos=self.snapshot_instance(instance))
 
+    @transaction.atomic
     def perform_destroy(self, instance):
         anterior = self.snapshot_instance(instance)
         soft_delete_instance(instance, self.request.user, valores_anteriores=anterior)
@@ -121,12 +142,35 @@ class ClienteViewSet(AuditedModelViewSet):
     permission_classes = [ClientePermission]
     module_name = 'Clientes y Contratos'
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+        q = params.get('q', '').strip()
+        if q:
+            queryset = queryset.filter(Q(codigo_cliente__icontains=q) | Q(rut_cliente__icontains=q) | Q(razon_social__icontains=q) | Q(giro_comercial__icontains=q) | Q(contacto_principal__icontains=q) | Q(correo_contacto__icontains=q))
+        for field in ('estado', 'sector'):
+            if params.get(field):
+                queryset = queryset.filter(**{field: params[field]})
+        return queryset
+
 
 class ContratoViewSet(AuditedModelViewSet):
     queryset = Contrato.objects.select_related('cliente').all()
     serializer_class = ContratoSerializer
     permission_classes = [ContratoPermission]
     module_name = 'Clientes y Contratos'
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+        q = params.get('q', '').strip()
+        if q:
+            queryset = queryset.filter(Q(numero_contrato__icontains=q) | Q(nombre__icontains=q) | Q(cliente__razon_social__icontains=q))
+        if params.get('cliente_id'):
+            queryset = queryset.filter(cliente_id=params['cliente_id'])
+        if params.get('estado'):
+            queryset = queryset.filter(estado=params['estado'])
+        return _apply_date_range(queryset, params, 'fecha_inicio')
 
 
 class CategoriaServicioViewSet(AuditedModelViewSet):
@@ -135,12 +179,28 @@ class CategoriaServicioViewSet(AuditedModelViewSet):
     permission_classes = [CategoriaServicioPermission]
     module_name = 'Categorías de servicio'
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        q = self.request.query_params.get('q', '').strip()
+        return queryset.filter(nombre__icontains=q) if q else queryset
+
 
 class PresupuestoViewSet(AuditedModelViewSet):
     queryset = Presupuesto.objects.select_related('cliente', 'categoria_servicio').prefetch_related('items').all()
     serializer_class = PresupuestoSerializer
     permission_classes = [PresupuestoPermission]
     module_name = 'Presupuestos'
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+        q = params.get('q', '').strip()
+        if q:
+            queryset = queryset.filter(Q(numero_presupuesto__icontains=q) | Q(cliente__razon_social__icontains=q) | Q(contacto__icontains=q) | Q(items__descripcion__icontains=q)).distinct()
+        for param, field in (('cliente_id', 'cliente_id'), ('categoria_servicio_id', 'categoria_servicio_id'), ('estado', 'estado'), ('aprobacion_gerencia', 'aprobacion_gerencia')):
+            if params.get(param):
+                queryset = queryset.filter(**{field: params[param]})
+        return _apply_date_range(queryset, params, 'fecha_emision')
 
     @action(detail=True, methods=['post'])
     def enviar(self, request, pk=None):
@@ -193,8 +253,15 @@ class ObraViewSet(AuditedModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
         if self.request.user.rol == 'TECNICO':
-            return queryset.filter(tecnico_responsable=self.request.user)
-        return queryset
+            queryset = queryset.filter(tecnico_responsable=self.request.user)
+        params = self.request.query_params
+        q = params.get('q', '').strip()
+        if q:
+            queryset = queryset.filter(Q(codigo_obra__icontains=q) | Q(nombre_obra__icontains=q) | Q(presupuesto__numero_presupuesto__icontains=q) | Q(presupuesto__cliente__razon_social__icontains=q) | Q(tecnico_responsable__first_name__icontains=q) | Q(tecnico_responsable__last_name__icontains=q))
+        for param, field in (('cliente_id', 'presupuesto__cliente_id'), ('tecnico_id', 'tecnico_responsable_id'), ('estado', 'estado_operativo'), ('estado_comercial', 'estado_comercial'), ('categoria_servicio_id', 'clasificacion_servicio_id')):
+            if params.get(param):
+                queryset = queryset.filter(**{field: params[param]})
+        return _apply_date_range(queryset, params, 'fecha_inicio')
 
     @action(detail=False, methods=['get'], url_path='presupuestos-disponibles')
     def presupuestos_disponibles(self, request):
@@ -242,6 +309,17 @@ class CostoMaterialViewSet(AuditedModelViewSet):
     permission_classes = [CostoPermission]
     module_name = 'Costos de obra'
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+        q = params.get('q', '').strip()
+        if q:
+            queryset = queryset.filter(Q(descripcion__icontains=q) | Q(obra__codigo_obra__icontains=q) | Q(obra__nombre_obra__icontains=q))
+        for param, field in (('obra_id', 'obra_id'), ('cliente_id', 'obra__presupuesto__cliente_id'), ('tecnico_id', 'obra__tecnico_responsable_id'), ('estado', 'obra__estado_operativo'), ('categoria', 'categoria')):
+            if params.get(param):
+                queryset = queryset.filter(**{field: params[param]})
+        return _apply_date_range(queryset, params, 'fecha')
+
 
 class FacturaViewSet(AuditedModelViewSet):
     queryset = Factura.objects.select_related('obra__presupuesto__cliente').all()
@@ -249,9 +327,22 @@ class FacturaViewSet(AuditedModelViewSet):
     permission_classes = [FacturaPermission]
     module_name = 'Facturación y Cobranza'
 
-    @action(detail=True, methods=['post'], url_path='notas-credito')
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+        q = params.get('q', '').strip()
+        if q:
+            queryset = queryset.filter(Q(numero_factura__icontains=q) | Q(obra__codigo_obra__icontains=q) | Q(obra__nombre_obra__icontains=q) | Q(obra__presupuesto__cliente__razon_social__icontains=q))
+        for param, field in (('cliente_id', 'obra__presupuesto__cliente_id'), ('tecnico_id', 'obra__tecnico_responsable_id'), ('obra_id', 'obra_id'), ('estado', 'estado_pago')):
+            if params.get(param):
+                queryset = queryset.filter(**{field: params[param]})
+        return _apply_date_range(queryset, params, 'fecha_emision')
+
+    @action(detail=True, methods=['get', 'post'], url_path='notas-credito')
     def notas_credito(self, request, pk=None):
         factura = self.get_object()
+        if request.method == 'GET':
+            return Response(list(factura.notas_credito.order_by('fecha', 'id').values('id', 'numero', 'monto', 'motivo', 'fecha', 'usuario_id')))
         serializer = NotaCreditoSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         nota = registrar_nota_credito(factura, **serializer.validated_data, usuario=request.user)
@@ -265,15 +356,28 @@ class PagoViewSet(AuditedModelViewSet):
     module_name = 'Facturación y Cobranza'
     http_method_names = ['get', 'post', 'head', 'options']
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+        q = params.get('q', '').strip()
+        if q:
+            queryset = queryset.filter(Q(factura__numero_factura__icontains=q) | Q(metodo_pago__icontains=q) | Q(comprobante__icontains=q) | Q(folio_recibo__icontains=q))
+        for param, field in (('factura_id', 'factura_id'), ('cliente_id', 'factura__obra__presupuesto__cliente_id'), ('tecnico_id', 'factura__obra__tecnico_responsable_id')):
+            if params.get(param):
+                queryset = queryset.filter(**{field: params[param]})
+        return _apply_date_range(queryset, params, 'fecha_pago')
+
     def perform_create(self, serializer):
         factura = serializer.validated_data['factura']
         datos = {key: value for key, value in serializer.validated_data.items() if key != 'factura'}
         pago = registrar_pago(factura, datos, self.request.user)
         serializer.instance = pago
 
-    @action(detail=True, methods=['post'], url_path='reversas')
+    @action(detail=True, methods=['get', 'post'], url_path='reversas')
     def reversas(self, request, pk=None):
         pago = self.get_object()
+        if request.method == 'GET':
+            return Response(list(pago.reversiones.order_by('fecha', 'id').values('id', 'monto', 'motivo', 'fecha', 'usuario_id')))
         serializer = ReversaPagoSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         reversa = revertir_pago(pago, **serializer.validated_data, usuario=request.user)
@@ -289,20 +393,15 @@ class AuditoriaLogViewSet(viewsets.ReadOnlyModelViewSet):
         queryset = super().get_queryset()
         modulo = self.request.query_params.get('modulo')
         resultado = self.request.query_params.get('resultado')
-        desde = self.request.query_params.get('desde')
-        hasta = self.request.query_params.get('hasta')
+        params = self.request.query_params
         busqueda = self.request.query_params.get('q')
         if modulo:
             queryset = queryset.filter(modulo=modulo)
         if resultado in {'exito', 'error', 'incompleto'}:
             queryset = queryset.filter(resultado=resultado)
-        if desde:
-            queryset = queryset.filter(fecha__date__gte=desde)
-        if hasta:
-            queryset = queryset.filter(fecha__date__lte=hasta)
         if busqueda:
             queryset = queryset.filter(Q(accion__icontains=busqueda) | Q(detalle__icontains=busqueda) | Q(entidad__icontains=busqueda))
-        return queryset
+        return _apply_date_range(queryset, params, 'fecha__date')
 
 
 class DashboardResumenView(APIView):

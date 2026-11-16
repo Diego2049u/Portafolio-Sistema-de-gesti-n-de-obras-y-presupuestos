@@ -9,7 +9,8 @@ export default function MainLayout({
   breadcrumb,
   period,
   userRole,
-  user
+  user,
+  onLogout,
 }) {
   const isNestedLayout = useContext(LayoutContext);
 
@@ -24,7 +25,7 @@ export default function MainLayout({
           userRole={userRole || user?.role}
         />
         <div className="flex-1 flex flex-col min-w-0">
-          <Header breadcrumb={breadcrumb} period={period} user={user} />
+          <Header breadcrumb={breadcrumb} period={period} user={user} onLogout={onLogout} />
           <main className="flex-1 p-6 md:p-8 overflow-y-auto">{children}</main>
         </div>
       </div>

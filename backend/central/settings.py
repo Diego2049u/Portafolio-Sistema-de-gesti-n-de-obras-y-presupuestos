@@ -39,6 +39,23 @@ def load_env_file(path):
 load_env_file(BASE_DIR / '.env')
 
 
+def env_bool(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {'1', 'true', 'yes', 'si'}
+
+
+def env_int(name, default=0):
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ImproperlyConfigured(f'{name} debe ser un número entero.') from exc
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
@@ -48,10 +65,10 @@ if not SECRET_KEY:
     raise ImproperlyConfigured('Define DJANGO_SECRET_KEY en backend/.env o en el entorno.')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get('DJANGO_DEBUG', 'false').strip().lower() in {'1', 'true', 'yes', 'si'}
+DEBUG = env_bool('DJANGO_DEBUG', False)
 
 ALLOWED_HOSTS = [host.strip() for host in os.environ.get('FYAG_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if host.strip()]
-FYAG_TRUST_PROXY_HEADERS = os.environ.get('FYAG_TRUST_PROXY_HEADERS', 'false').strip().lower() in {'1', 'true', 'yes', 'si'}
+FYAG_TRUST_PROXY_HEADERS = env_bool('FYAG_TRUST_PROXY_HEADERS', False)
 
 
 # Application definition
@@ -116,10 +133,27 @@ CORS_ALLOWED_ORIGINS = [
 CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS
 CSRF_COOKIE_SAMESITE = 'Lax'
 CSRF_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'
+SESSION_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_HTTPONLY = True
 JWT_ACCESS_COOKIE_NAME = 'fyag_access'
 JWT_REFRESH_COOKIE_NAME = 'fyag_refresh'
 JWT_COOKIE_SAMESITE = 'Lax'
 JWT_COOKIE_SECURE = not DEBUG
+
+# Refuerzo de transporte para despliegues HTTPS. Se activa explícitamente para
+# no redirigir una demo local HTTP; HSTS se configura con un valor positivo solo
+# cuando el dominio ya sirve HTTPS de forma estable.
+SECURE_SSL_REDIRECT = env_bool('FYAG_SECURE_SSL_REDIRECT', False)
+SECURE_HSTS_SECONDS = max(0, env_int('FYAG_HSTS_SECONDS', 0))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool('FYAG_HSTS_INCLUDE_SUBDOMAINS', False)
+SECURE_HSTS_PRELOAD = env_bool('FYAG_HSTS_PRELOAD', False)
+SECURE_REFERRER_POLICY = 'same-origin'
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = 'DENY'
+if FYAG_TRUST_PROXY_HEADERS:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases

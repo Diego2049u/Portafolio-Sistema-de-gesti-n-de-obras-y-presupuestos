@@ -6,7 +6,7 @@ Este contrato describe el alcance implementado para preparar la API del MVP. Sus
 ALCANCE
 -------
 - Clientes y contratos.
-- Catálogo administrable de categorías de servicio. Categorías iniciales: Proyecto, Mantención, Climatización, Proyecto eléctrico, Emergencia, Garantía y Mejoras. Venta de repuestos queda fuera por ahora.
+- Catálogo administrable de categorías de servicio: Proyecto, Mantención, Climatización, Proyecto eléctrico, Emergencia, Garantía, Venta de repuestos y Mejoras. La categoría Venta de repuestos forma parte de la clasificación de servicios; un módulo independiente de ventas/repuestos queda fuera de este MVP.
 - Presupuestos, partidas y PDF.
 - Obras, costos directos, facturas, pagos y cierre comercial.
 - Eventos de auditoría.
@@ -49,11 +49,89 @@ Acciones de obra:
 
 Auditoría admite filtros `modulo`, `resultado` (exito, error, incompleto), `desde`, `hasta` y `q`.
 
+CONTRATO DE BÚSQUEDA, FILTROS Y PAGINACIÓN
+------------------------------------------
+Todos los filtros se aplican en el queryset del servidor antes de paginar. En listados paginados se conservan `count`, `next`, `previous` y `results`; la página predeterminada contiene 25 registros y se recorre con `page`.
+
+| Listado | Parámetros admitidos | Significado de `desde` / `hasta` |
+|---------|----------------------|----------------------------------|
+| `/api/clientes/` | `q`, `estado`, `sector` | No aplica |
+| `/api/contratos/` | `q`, `cliente_id`, `estado`, `desde`, `hasta` | `fecha_inicio` |
+| `/api/categorias-servicio/` | `q` | No aplica |
+| `/api/presupuestos/` | `q`, `cliente_id`, `categoria_servicio_id`, `estado`, `aprobacion_gerencia`, `desde`, `hasta` | `fecha_emision` |
+| `/api/obras/` | `q`, `cliente_id`, `tecnico_id`, `estado` (operativo), `estado_comercial`, `categoria_servicio_id`, `desde`, `hasta` | `fecha_inicio` |
+| `/api/costos/` | `q`, `obra_id`, `categoria`, `desde`, `hasta` | `fecha` del costo |
+| `/api/facturas/` | `q`, `cliente_id`, `obra_id`, `estado`, `desde`, `hasta` | `fecha_emision` |
+| `/api/pagos/` | `q`, `factura_id`, `cliente_id`, `tecnico_id`, `desde`, `hasta` | `fecha_pago` |
+| `/api/auditoria/` | `q`, `modulo`, `resultado`, `desde`, `hasta` | Fecha del evento |
+
+`q` realiza búsqueda parcial sin distinguir mayúsculas en los identificadores y campos descriptivos pertinentes a cada recurso. Las fechas usan `AAAA-MM-DD`; si se envían ambas, `desde` debe ser anterior o igual a `hasta`. Los filtros de cliente/técnico no amplían el alcance RBAC: por ejemplo, el queryset de obras sigue restringiendo a cada técnico sus propias asignaciones.
+
+El Dashboard usa `desde`, `hasta`, `cliente_id`, `tecnico_id` y `estado_obra` según `DashboardFiltroSerializer`; `actualizar=1` fuerza una consulta sin reutilizar el valor vigente de caché.
+
+PDF de presupuesto: `GET /api/presupuestos/{id}/exportar-pdf/` descarga `application/pdf` con el folio, cliente, RUT, contacto, servicio, fechas, detalle de partidas y totales neto/IVA/total. Incluye el logo FYAG disponible en el frontend y muestra la fecha de vencimiento registrada como vigencia, sin inventar un plazo fijo. Excel queda postergado; CSV no forma parte del alcance.
+
+MATRIZ DE ACCESO DEL CONTRATO
+-----------------------------
+Gerencia tiene bypass total en la API, incluida la administración y activación de usuarios. Esta regla es una decisión explícita del MVP. La interfaz oculta páginas y acciones según rol, pero esa presentación nunca sustituye los permisos del backend.
+
+| Módulo / capacidad | Gerencia | Finanzas | Supervisor | Técnico |
+|--------------------|----------|----------|------------|---------|
+| Usuarios y activación | Administración total | Sin acceso | Sin acceso | Sin acceso |
+| Clientes | CRUD | CRUD | Solo lectura | Sin acceso |
+| Contratos | CRUD | CRUD | Sin acceso | Sin acceso |
+| Categorías de servicio | CRUD | Solo lectura | Solo lectura | Solo lectura |
+| Presupuestos, partidas e historial | CRUD + PDF + workflows | CRUD + PDF + envío + decisión del cliente + historial | Sin acceso | Sin acceso |
+| Obras | CRUD + workflows + reapertura | Lectura + cierre comercial | CRUD + transiciones | Lectura de obras asignadas + historial |
+| Costos de obra | CRUD | CRUD | CRUD | Sin acceso |
+| Facturas | CRUD + notas de crédito | CRUD + notas de crédito | Sin acceso | Sin acceso |
+| Pagos | Lectura + registro + reversas; no editar/eliminar | Lectura + registro + reversas; no editar/eliminar | Sin acceso | Sin acceso |
+| Dashboard | Lectura | Lectura | Sin acceso | Sin acceso |
+| Auditoría | Lectura | Sin acceso | Sin acceso | Sin acceso |
+| Disponibilidad/carga de técnicos | Lectura | Sin acceso | Lectura | Sin acceso |
+
+Precisiones para las páginas del frontend:
+- La página Clientes y Contratos puede mostrarse al Supervisor solo en modo de lectura de clientes; las operaciones de contratos siguen restringidas a Gerencia y Finanzas.
+- La administración de usuarios existe en la API para Gerencia, pero todavía no tiene página en la navegación del frontend.
+- El backend ofrece CRUD de contratos, pero la página actual aún no expone una gestión de contratos completa.
+- Técnico solo recibe obras asignadas en los listados y detalles de obras. La restricción se aplica también al historial de estados.
+- La página de Técnicos representa carga actual (`obras_activas`), no disponibilidad de calendario.
+- Aunque Gerencia tiene bypass en backend, el frontend debe permitirle las acciones de Gerencia indicadas en esta matriz y no ocultarlas por comprobar exclusivamente `role === 'FINANZAS'`.
+
+ESTADOS Y ETIQUETAS CANÓNICAS
+----------------------------
+Los valores entre paréntesis son los valores de API/BD; las etiquetas en español son las que debe presentar la interfaz. El frontend no debe inventar estados adicionales ni enviar etiquetas como si fueran valores de API.
+
+- Presupuesto, decisión comercial: Borrador (`borrador`) → Enviado al cliente (`enviado`) → Aprobado por el cliente (`aprobado`) o Rechazado por el cliente (`rechazado`). Rechazado es terminal; los cambios solicitados requieren crear otro presupuesto.
+- Presupuesto, revisión interna separada: No requerida (`no_requerida`), Pendiente (`pendiente`), Aprobada (`aprobada`) o Rechazada (`rechazada`). Si Gerencia exige revisión mientras está en borrador, el envío lo deja en Pendiente de aprobación interna (`pendiente_gerencia`). Tras aprobar Gerencia pasa a `enviado`; al rechazar Gerencia vuelve a `borrador`. No existe umbral monetario automático acordado.
+- Obra, estado operativo: En proceso (`en-proceso`), Finalizada (`finalizada`), Suspendida (`suspendida`) o Cancelada (`cancelada`). Transiciones: `en-proceso` → `finalizada`, `suspendida` o `cancelada`; `suspendida` → `en-proceso` o `cancelada`. Finalizada y cancelada son terminales salvo reapertura autorizada a Gerencia.
+- Obra, estado comercial independiente: En curso (`en_curso`), Pendiente de facturación (`pendiente_facturacion`), Pendiente de cobro (`pendiente_cobro`) o Cerrada comercialmente (`cerrada`). Una obra puede estar operativamente finalizada mientras su estado comercial sigue pendiente.
+- Factura: Pendiente de cobro (`PENDIENTE`), Pago parcial (`PARCIAL`), Pagada (`PAGADO`) o Saldo cubierto con nota de crédito (`SALDADO`). `PAGADO` indica saldo cubierto por pagos; `SALDADO`, por nota de crédito.
+- Usuario: Pendiente de activación (`pendiente`), Activo (`activo`) o Bloqueado (`bloqueado`). Solo usuarios activos y no eliminados pueden autenticarse.
+- Contrato: Vigente (`vigente`), Finalizado (`finalizado`) o Cancelado (`cancelado`).
+
+CONVENCIÓN DE RESPUESTAS Y ERRORES
+---------------------------------
+- Respuestas correctas: JSON del recurso (o lista/página según la acción); acciones de workflow devuelven el recurso actualizado. PDF devuelve el archivo como `application/pdf`.
+- Errores de validación de campos: objeto JSON cuyas claves son los campos y cuyos valores contienen mensajes; el frontend debe conservar y mostrar errores junto al campo correspondiente.
+- Errores de reglas de negocio de servicios: `{"error":"CODIGO_ESTABLE","detalle":"Mensaje legible en español."}`. El frontend puede usar `error` para tratamiento por código y debe mostrar `detalle` al usuario.
+- Errores estándar de autenticación, autorización, ruta no encontrada o throttling pueden venir como `{"detail":"..."}`. El cliente debe aceptar `detail`, errores por campo y `error`/`detalle`; no asumir una forma única para todas las respuestas.
+- Códigos de negocio se mantienen estables aunque cambie la redacción de `detalle`. Entre los existentes se incluyen `TRANSICION_NO_PERMITIDA`, `DATOS_INCOMPLETOS`, `TECNICO_REQUERIDO`, `FACTURAS_ASOCIADAS`, `OBRA_NO_FINALIZADA`, `OBRA_YA_CERRADA`, `FACTURACION_PENDIENTE`, `PAGOS_PENDIENTES`, `HISTORIAL_FINANCIERO`, `OBRA_CERRADA`, `PAGO_INMUTABLE` y `CATEGORIA_EN_USO`.
+- Las escrituras requieren sesión por cookie y CSRF. Access JWT dura 15 minutos; el frontend no almacena tokens en `localStorage` ni en `sessionStorage`.
+
+DECISIONES PENDIENTES ANTES DE AMPLIAR REGLAS
+--------------------------------------------
+Estas reglas no se deben inventar durante la integración. Si una pantalla o endpoint las necesita, acordarlas antes de implementarlas:
+- Si las fechas de término de un contrato deben ser posteriores o iguales a la fecha de inicio cuando ambas estén informadas.
+- Si la fecha de vencimiento de una factura debe ser posterior a la fecha de emisión y si se aceptan pagos con fecha futura.
+- La política técnica de idempotencia para registrar pagos (por ejemplo, identificador de operación para reintentos/doble envío), preservando el rechazo de sobrepagos y la inmutabilidad del pago registrado.
+- Umbral o criterio para exigir aprobación gerencial automática. Por ahora solo Gerencia puede exigirla manualmente mientras el presupuesto está en borrador.
+
 REGLAS CENTRALES
 ----------------
 - El presupuesto usa `estado` para el flujo con el cliente y `aprobacion_gerencia` para la autorización interna opcional.
 - Una obra puede finalizar operativamente antes de cobrar. El cierre comercial requiere obra finalizada, al menos una factura y saldo cero en todas sus facturas.
-- No se puede finalizar una obra sin técnico responsable ni cancelar una obra con pagos registrados.
+- No se puede finalizar una obra sin técnico responsable ni cancelar una obra con cualquier factura emitida, pagada o impaga.
 - Los importes del presupuesto se calculan a partir de sus partidas; saldo y estado de factura se actualizan al registrar pagos.
 - Los DELETE de recursos de negocio son borrados lógicos. No se permite eliminar una factura con pagos/saldo, un presupuesto vinculado a una obra ni una obra con facturas o gastos. Los pagos son inmutables por API.
 - Los eventos de auditoría son append-only desde la API y solo Gerencia puede consultarlos.
@@ -75,7 +153,7 @@ El resumen está disponible para Gerencia y Finanzas. Si no se envían fechas, c
 
 CATÁLOGO INICIAL
 ----------------
-Después de preparar/aplicar las migraciones del esquema, ejecutar:
+Categorías iniciales: Proyecto, Mantención, Climatización, Proyecto eléctrico, Emergencia, Garantía, Venta de repuestos y Mejoras. Después de preparar/aplicar las migraciones del esquema, ejecutar:
   python manage.py seed_catalogs
 
 MIGRACIONES

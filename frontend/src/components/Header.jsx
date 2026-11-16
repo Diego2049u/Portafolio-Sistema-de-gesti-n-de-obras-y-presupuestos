@@ -3,7 +3,8 @@ import { getRoleLabel } from '../config/navegacion';
 export default function Header({
   breadcrumb = 'FYAG ERP / Módulo Operativo',
   period = '10-2026',
-  user = { name: 'Ing. R. Morales', roleLabel: 'Gerencia / Admin General' },
+  user = {},
+  onLogout,
 }) {
   const userName = user?.name || 'Usuario';
   const roleLabel = user?.roleLabel || getRoleLabel(user?.role);
@@ -18,7 +19,7 @@ export default function Header({
       </div>
 
       {/* Buscador Global y Perfil de Usuario */}
-      <div className="flex items-center gap-4 shrink-0">
+      <div className="flex items-center gap-3 shrink-0">
         <div className="relative hidden md:flex items-center">
           <span className="material-symbols-outlined absolute left-2.5 text-secondary text-[18px]">
             search
@@ -42,6 +43,16 @@ export default function Header({
             {userName.charAt(0)}
           </div>
         </div>
+        <button
+          onClick={onLogout}
+          className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-semibold text-secondary hover:bg-surface-container-low hover:text-on-surface focus:outline-none focus:ring-2 focus:ring-primary"
+          type="button"
+          aria-label="Cerrar sesión"
+          title="Cerrar sesión"
+        >
+          <span className="material-symbols-outlined text-[18px]">logout</span>
+          <span className="hidden sm:inline">Salir</span>
+        </button>
       </div>
     </header>
   );

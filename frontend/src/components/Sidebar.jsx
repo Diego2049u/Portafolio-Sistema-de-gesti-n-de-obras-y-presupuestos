@@ -12,7 +12,7 @@ export default function Sidebar({ userRole }) {
           <img src={flyagLogo} alt="FYAG Logo" className="h-10 w-auto object-contain" />
           <div className="flex flex-col">
             <span className="font-headline-sm text-on-surface font-bold text-sm">FYAG OBRAS</span>
-            <span className="font-label-sm text-secondary text-[10px] tracking-wider">ERP v2.4 ENTERPRISE</span>
+            <span className="font-label-sm text-secondary text-[10px] tracking-wider">ERP Frio y agroindustria</span>
           </div>
         </div>
 
@@ -23,7 +23,7 @@ export default function Sidebar({ userRole }) {
           {items.map((item) => <NavLink
             key={item.id}
             to={item.path}
-            end
+            end={item.id !== 'tecnicos'}
             className={({ isActive }) => `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-150 w-full ${isActive ? 'bg-primary text-on-primary font-medium shadow-sm' : 'text-secondary hover:bg-surface-container-low hover:text-on-surface'}`}
           >
             <span className="material-symbols-outlined text-[20px]">{item.icon}</span>

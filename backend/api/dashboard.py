@@ -1,5 +1,5 @@
 from django.db.models import Count, Q, Sum
-from django.db.models.functions import TruncMonth
+from django.db.models.functions import TruncDate, TruncMonth
 from datetime import timedelta
 from django.utils import timezone
 
@@ -30,11 +30,20 @@ def construir_resumen_dashboard(*, desde, hasta, cliente_id=None, tecnico_id=Non
         fecha_emision__range=(desde, hasta),
         obra_id__in=obras.values('pk'),
     )
-    ventas = facturas.aggregate(total=Sum('monto_total'), cantidad=Count('pk'))
-    notas_credito_periodo = NotaCredito.objects.filter(
+    ventas_diarias = list(facturas.values('fecha_emision').annotate(total=Sum('monto_total'), cantidad=Count('pk')))
+    notas_credito = NotaCredito.objects.filter(
         fecha__date__range=(desde, hasta),
         factura__obra_id__in=obras.values('pk'),
-    ).aggregate(total=Sum('monto'), cantidad=Count('pk'))
+    )
+    creditos_diarios = list(
+        notas_credito.annotate(dia=TruncDate('fecha')).values('dia').annotate(total=Sum('monto'), cantidad=Count('pk'))
+    )
+    monto_facturado = sum(fila['total'] for fila in ventas_diarias)
+    monto_creditos = sum(fila['total'] for fila in creditos_diarios)
+    ventas_netas_por_dia = {fila['fecha_emision']: fila['total'] for fila in ventas_diarias}
+    for fila in creditos_diarios:
+        dia = fila['dia']
+        ventas_netas_por_dia[dia] = ventas_netas_por_dia.get(dia, 0) - fila['total']
     recaudacion_pagos = Pago.objects.filter(
         fecha_pago__range=(desde, hasta), factura__obra_id__in=obras.values('pk'),
     ).aggregate(total=Sum('monto'), cantidad=Count('pk'))
@@ -170,11 +179,11 @@ def construir_resumen_dashboard(*, desde, hasta, cliente_id=None, tecnico_id=Non
         },
         'metricas': {
             'ventas_facturadas': {
-                'monto_total_bruto': int(ventas['total'] or 0),
-                'monto_notas_credito': int(notas_credito_periodo['total'] or 0),
-                'monto_total': int((ventas['total'] or 0) - (notas_credito_periodo['total'] or 0)),
-                'cantidad_facturas': ventas['cantidad'],
-                'cantidad_notas_credito': notas_credito_periodo['cantidad'],
+                'monto_total_bruto': int(monto_facturado),
+                'monto_notas_credito': int(monto_creditos),
+                'monto_total': int(monto_facturado - monto_creditos),
+                'cantidad_facturas': sum(fila['cantidad'] for fila in ventas_diarias),
+                'cantidad_notas_credito': sum(fila['cantidad'] for fila in creditos_diarios),
             },
             'presupuestos_aprobados': {
                 'cantidad': aprobados['cantidad'],
@@ -219,6 +228,10 @@ def construir_resumen_dashboard(*, desde, hasta, cliente_id=None, tecnico_id=Non
             'servicios_realizados': servicios_realizados,
         },
         'distribuciones': {
+            'ventas_netas_diarias': [
+                {'fecha': dia.isoformat(), 'monto_total': int(monto)}
+                for dia, monto in sorted(ventas_netas_por_dia.items())
+            ],
             'obras_por_estado': obras_por_estado,
             'obras_activas_por_tecnico': [{
                 'tecnico_id': fila['tecnico_responsable_id'],

@@ -61,6 +61,7 @@ class ObraPermission(RolePermission):
         'create': {SUPERVISOR}, 'update': {SUPERVISOR}, 'partial_update': {SUPERVISOR}, 'destroy': {SUPERVISOR},
         'transicionar': {SUPERVISOR}, 'cerrar_comercial': {FINANZAS}, 'reabrir': {GERENCIA},
         'presupuestos_disponibles': {SUPERVISOR}, 'tecnicos_disponibles': {SUPERVISOR},
+        'agenda_tecnico': {SUPERVISOR, TECNICO},
         'historial_estados': {FINANZAS, SUPERVISOR, TECNICO},
     }
 

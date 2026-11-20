@@ -33,6 +33,29 @@ from .services import (
     registrar_nota_credito, reabrir_obra, revertir_pago, transicionar_obra,
 )
 from .pdf_generador import generar_pdf_presupuesto
+from .disponibilidad import CHILE, agenda, evaluar, validar_rango
+from datetime import datetime, time, timedelta
+from django.utils import timezone
+from rest_framework import serializers
+
+
+class PeriodoDisponibilidadSerializer(serializers.Serializer):
+    inicio = serializers.DateTimeField(default_timezone=CHILE)
+    fin = serializers.DateTimeField(default_timezone=CHILE)
+
+    def validate(self, attrs):
+        validar_rango(attrs['inicio'], attrs['fin'])
+        return attrs
+
+
+def periodo_disponibilidad(params):
+    if not params.get('inicio') and not params.get('fin'):
+        hoy = timezone.localdate(timezone=CHILE)
+        lunes = hoy - timedelta(days=hoy.weekday())
+        return datetime.combine(lunes, time(8), CHILE), datetime.combine(lunes + timedelta(days=4), time(18), CHILE)
+    filtro = PeriodoDisponibilidadSerializer(data=params)
+    filtro.is_valid(raise_exception=True)
+    return filtro.validated_data['inicio'], filtro.validated_data['fin']
 
 
 def _apply_date_range(queryset, params, field):
@@ -276,11 +299,26 @@ class ObraViewSet(AuditedModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='tecnicos-disponibles')
     def tecnicos_disponibles(self, request):
-        from django.db.models import Count, Q
-        tecnicos = Usuario.objects.filter(rol='TECNICO', estado='activo').annotate(
-            obras_activas=Count('obras_asignadas', filter=Q(obras_asignadas__estado_operativo__in=['en-proceso', 'suspendida']))
-        ).values('id', 'first_name', 'last_name', 'obras_activas')
-        return Response(list(tecnicos))
+        inicio, fin = periodo_disponibilidad(request.query_params)
+        excluir = serializers.IntegerField(required=False, min_value=1).run_validation(request.query_params['excluir']) if request.query_params.get('excluir') else None
+        tecnicos = Usuario.objects.filter(rol='TECNICO', estado='activo', is_active=True).order_by('first_name', 'last_name', 'id')
+        return Response([{'id': t.pk, 'first_name': t.first_name, 'last_name': t.last_name,
+                          'nombre': t.get_full_name(), 'especialidad': t.cargo,
+                          **evaluar(t.pk, inicio, fin, excluir)} for t in tecnicos])
+
+    @action(detail=False, methods=['get'], url_path='agenda-tecnico')
+    def agenda_tecnico(self, request):
+        from django.shortcuts import get_object_or_404
+        # El técnico nunca puede consultar la agenda de otro usuario.
+        tecnico_id = request.user.pk if request.user.rol == 'TECNICO' else request.query_params.get('tecnico_id')
+        if not tecnico_id or not str(tecnico_id).isdigit():
+            raise ValidationError({'tecnico_id': 'Seleccione un técnico válido.'})
+        tecnico = get_object_or_404(Usuario.objects, pk=tecnico_id, rol='TECNICO')
+        desde = serializers.DateField().run_validation(request.query_params.get('desde'))
+        hasta = serializers.DateField().run_validation(request.query_params.get('hasta'))
+        if desde > hasta or (hasta - desde).days > 366:
+            raise ValidationError({'periodo': 'Consulte entre 1 y 367 días consecutivos.'})
+        return Response(agenda(tecnico, datetime.combine(desde, time.min, CHILE), datetime.combine(hasta + timedelta(days=1), time.min, CHILE)))
 
     @action(detail=True, methods=['get'], url_path='historial-estados')
     def historial_estados(self, request, pk=None):

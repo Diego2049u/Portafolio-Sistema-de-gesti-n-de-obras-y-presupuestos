@@ -274,6 +274,8 @@ class Obra(SoftDeleteModel):
     fecha_termino = models.DateField(null=True, blank=True)
     fecha_cierre_comercial = models.DateTimeField(null=True, blank=True)
     observaciones_tecnicas = models.TextField(blank=True, null=True)
+    inicio_programado = models.DateTimeField(null=True, blank=True)
+    fin_estimado = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         indexes = [

@@ -1,16 +1,48 @@
-import { useState } from 'react';
-import MainLayout from '../components/layout';
-import TecnicoFichaModal, { TECNICOS_REGISTRADOS } from '../components/TecnicoFichaModal';
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { api, withQuery } from '../api/client';
+import { ESTADOS_DISPONIBILIDAD, rangoLaboralActual } from '../components/calendario/agenda';
 
-export default function Tecnicos({ userRole = 'GERENCIA' }) {
-  const [seleccionado, setSeleccionado] = useState(null);
-  const total = TECNICOS_REGISTRADOS.length;
-  const disponibles = TECNICOS_REGISTRADOS.filter((tecnico) => tecnico.estado === 'LIBERADO').length;
-  const ocupados = total - disponibles;
-  if (!['GERENCIA', 'SUPERVISOR'].includes(userRole)) return <div className="p-8 text-center text-secondary">Acceso restringido a Gerencia y Supervisión.</div>;
-  return <MainLayout breadcrumb="Disponibilidad Técnicos" period="Q4-2026"><div className="w-full bg-surface px-gutter-desktop py-margin">
-    <header className="mb-6"><p className="font-label-sm uppercase tracking-wider text-primary">Gestión de dotación</p><h1 className="mt-1 font-headline-lg text-headline-lg font-bold text-on-surface">Disponibilidad de Técnicos</h1><p className="mt-1 text-body-md text-secondary">Consulta la carga operativa y las asignaciones vigentes del equipo técnico.</p></header>
-    <section className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">{[{ label: 'Total Técnicos', value: total, icon: 'groups' }, { label: 'Disponibles / Liberados', value: disponibles, icon: 'event_available' }, { label: 'En Faena / Ocupados', value: ocupados, icon: 'engineering' }].map((item) => <article key={item.label} className="flex items-center justify-between rounded-xl bg-surface-container-lowest p-5 shadow-sm"><div><p className="text-label-sm font-semibold uppercase text-secondary">{item.label}</p><p className="mt-1 text-3xl font-bold text-on-surface">{item.value}</p></div><span className="material-symbols-outlined rounded-xl bg-primary/10 p-3 text-2xl text-primary">{item.icon}</span></article>)}</section>
-    <section className="overflow-hidden rounded-xl bg-surface-container-lowest shadow-sm"><div className="border-b border-surface-container p-5"><h2 className="font-headline-md font-bold text-on-surface">Equipo técnico</h2></div><div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-3">{TECNICOS_REGISTRADOS.map((tecnico) => <article key={tecnico.id} className="rounded-xl border border-surface-container p-4 transition-shadow hover:shadow-md"><div className="flex items-center gap-3"><div className={`flex h-12 w-12 items-center justify-center rounded-full font-bold ${tecnico.color}`}>{tecnico.iniciales}</div><div className="min-w-0 flex-1"><h3 className="truncate font-semibold text-on-surface">{tecnico.nombre}</h3><p className="text-label-sm text-secondary">{tecnico.especialidad}</p></div></div><span className={`mt-4 inline-flex rounded-full px-2.5 py-1 text-label-sm font-semibold ${tecnico.color}`}>{tecnico.estado}</span><p className="mt-3 text-body-sm text-secondary">{tecnico.obras.length ? `Obras asignadas: ${tecnico.obras.map((obra) => obra.nombre).join(', ')}` : 'Sin obras actualmente asignadas'}</p><button type="button" onClick={() => setSeleccionado(tecnico)} className="mt-4 inline-flex items-center gap-1 text-label-md font-semibold text-primary hover:underline">Ver Perfil <span className="material-symbols-outlined text-base">arrow_forward</span></button></article>)}</div></section>
-  </div><TecnicoFichaModal tecnico={seleccionado} onClose={() => setSeleccionado(null)} /></MainLayout>;
+const COLORES = { disponible: 'bg-emerald-50 text-emerald-800', parcial: 'bg-tertiary-fixed text-tertiary', ocupado: 'bg-primary/10 text-primary', sin_determinar: 'bg-surface-container text-secondary' };
+
+export default function Tecnicos() {
+  const [rango, setRango] = useState(rangoLaboralActual);
+  const [estado, setEstado] = useState({ rows: [], loading: true, error: '' });
+  const [version, setVersion] = useState(0);
+  useEffect(() => {
+    let vigente = true;
+    async function cargar() {
+      setEstado({ rows: [], loading: true, error: '' });
+      try {
+        if (!rango.inicio || !rango.fin || rango.inicio >= rango.fin) throw new Error('Indica un inicio anterior al término.');
+        const rows = await api.request(withQuery('/obras/tecnicos-disponibles/', rango));
+        if (vigente) setEstado({ rows, loading: false, error: '' });
+      } catch (error) { if (vigente) setEstado({ rows: [], loading: false, error: error.message }); }
+    }
+    cargar();
+    return () => { vigente = false; };
+  }, [rango, version]);
+
+  return <div className="space-y-6">
+    <header><p className="text-label-sm uppercase text-primary">Gestión de dotación</p><h1 className="mt-1 text-headline-lg font-bold">Disponibilidad de Técnicos</h1><p className="mt-1 text-secondary">Disponibilidad calculada para el período seleccionado, de lunes a viernes.</p></header>
+    <section className="flex flex-wrap items-end gap-4 rounded-xl bg-surface-container-lowest p-5 shadow-sm">
+      <label>Inicio<input type="datetime-local" className="mt-1 block rounded-lg bg-surface-container-low p-2" value={rango.inicio} onChange={(e) => setRango({ ...rango, inicio: e.target.value })} /></label>
+      <label>Término<input type="datetime-local" className="mt-1 block rounded-lg bg-surface-container-low p-2" value={rango.fin} onChange={(e) => setRango({ ...rango, fin: e.target.value })} /></label>
+      <button type="button" onClick={() => setVersion((v) => v + 1)} className="rounded-lg bg-primary-container px-4 py-2 text-on-primary">Actualizar</button>
+    </section>
+    {estado.error && <p role="alert" className="rounded bg-error-container p-4 text-error">{estado.error}</p>}
+    {estado.loading ? <p role="status">Consultando disponibilidad…</p> : !estado.error && <>
+      <section className="grid gap-4 sm:grid-cols-3">{['disponible', 'parcial', 'ocupado'].map((tipo) => <article key={tipo} className="rounded-xl bg-surface-container-lowest p-5 shadow-sm"><p className="text-label-sm text-secondary">{ESTADOS_DISPONIBILIDAD[tipo]}</p><p className="mt-1 text-3xl font-bold">{estado.rows.filter((t) => t.estado === tipo).length}</p></article>)}</section>
+      <section className="rounded-xl bg-surface-container-lowest p-5 shadow-sm"><h2 className="mb-4 font-semibold">Equipo técnico · {estado.rows.length}</h2><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {estado.rows.map((tecnico) => <article key={tecnico.id} className="rounded-xl border border-surface-container p-4">
+          <h3 className="font-semibold">{tecnico.nombre}</h3><p className="text-body-sm text-secondary">{tecnico.especialidad}</p>
+          <span className={`mt-4 inline-flex rounded-full px-3 py-1 text-label-sm ${COLORES[tecnico.estado]}`}>{ESTADOS_DISPONIBILIDAD[tecnico.estado]}</span>
+          <p className="mt-3 text-body-sm text-secondary">{tecnico.horas_ocupadas} de {tecnico.horas_laborales} horas laborales reservadas</p>
+          <p className="mt-2 text-body-sm text-secondary">{tecnico.obras.length ? tecnico.obras.map((o) => o.nombre).join(', ') : 'Sin obras asignadas en este período'}</p>
+          {!!tecnico.sin_planificar.length && <p className="mt-2 text-body-sm text-tertiary">Complete las fechas de las obras sin planificación.</p>}
+          <Link to={`/tecnicos/${tecnico.id}`} className="mt-4 inline-flex items-center gap-1 font-semibold text-primary hover:underline">Ver perfil <span aria-hidden="true" className="material-symbols-outlined text-base">arrow_forward</span></Link>
+        </article>)}
+      </div>{!estado.rows.length && <p className="text-secondary">No hay técnicos activos registrados.</p>}</section>
+    </>}
+  </div>;
 }

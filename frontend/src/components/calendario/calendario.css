@@ -1,0 +1,46 @@
+.calendario { background: #fff; border: 1px solid #e2e6ef; border-radius: 16px; overflow: hidden; color: #0b1c30; }
+.calendario-toolbar { display: grid; grid-template-columns: auto auto 1fr auto; align-items: center; gap: 16px; padding: 24px; min-height: 88px; }
+.calendario-controles { display: flex; gap: 8px; }
+.calendario-controles button, .calendario-toolbar select { display: inline-flex; align-items: center; justify-content: center; min-height: 38px; padding: 0 10px; background: white; border: 1px solid #e2e6ef; border-radius: 8px; font-size: 13px; }
+.calendario-controles button:hover { background: #f4f6fb; }
+.calendario button:focus-visible, .calendario select:focus-visible, .calendario [tabindex]:focus-visible { outline: 2px solid #004ac6; outline-offset: -2px; }
+.calendario-toolbar select { justify-self: end; }
+.calendario-periodo { text-align: center; }
+.calendario-periodo p { font-size: 11px; color: #737e94; margin-top: 4px; }
+.calendario-horizontal { overflow-x: auto; }
+.calendario-contenido { min-width: 900px; }
+.calendario-contenido.calendario-dia { min-width: 360px; }
+.calendario-cabecera, .calendario-resumen, .calendario-horas { display: grid; grid-template-columns: 64px repeat(var(--dias), minmax(0, 1fr)); }
+.calendario-cabecera { background: #f8f9fb; border-top: 1px solid #e2e6ef; border-bottom: 1px solid #e2e6ef; }
+.calendario-cabecera > * { border-right: 1px solid #e2e6ef; min-height: 46px; }
+.calendario-cabecera button { text-transform: uppercase; font-size: 11px; color: #65738b; }
+.calendario-cabecera button:hover { background: #eaf0ff; }
+.calendario-cabecera .calendario-hoy { background: #eef2ff; color: #004ac6; font-weight: 700; }
+.calendario-resumen > * { display: flex; align-items: center; border-right: 1px solid #e2e6ef; border-bottom: 1px solid #e2e6ef; min-height: 46px; padding: 5px; font-size: 11px; color: #65738b; }
+.calendario-resumen-hoy { background: #fff8dd; }
+.calendario-etiqueta { padding: 5px 7px; border: 1px solid #dce4ff; border-radius: 7px; background: #f0f4ff; color: #36508d; }
+.calendario-etiqueta-descanso { background: #f8f9fb; border-color: #e2e6ef; color: #737e94; }
+.calendario-scroll { height: 620px; overflow-y: auto; scrollbar-width: thin; }
+.calendario-horas { height: 1344px; }
+.calendario-eje > div { height: 56px; border-bottom: 1px solid #edf0f5; border-right: 1px solid #e2e6ef; padding: 8px 6px; text-align: center; color: #8b96ab; font-size: 11px; }
+.calendario-columna { position: relative; border-right: 1px solid #e2e6ef; background: repeating-linear-gradient(to bottom, transparent 0, transparent 27px, #f4f5f8 27px, #f4f5f8 28px, transparent 28px, transparent 55px, #edf0f5 55px, #edf0f5 56px); }
+.calendario-columna-hoy { background-color: #fafbff; }
+.calendario-bloque { position: absolute; left: 5px; right: 5px; border: 1px solid; border-left-width: 3px; border-radius: 7px; padding: 8px; overflow: auto; font-size: 11px; line-height: 1.5; }
+.calendario-bloque-titulo { font-weight: 600; }
+.calendario-bloque-detalle { margin-top: 5px; overflow-wrap: anywhere; }
+.calendario-bloque-disponible { background: #effcf5; color: #24724b; border-color: #bce9ce; border-left-color: #33b77a; }
+.calendario-bloque-ocupado { background: #eef2ff; color: #354cb4; border-color: #d3dcff; border-left-color: #5364ff; }
+.calendario-bloque-descanso { background: #f6f7f9; color: #737e94; border-color: #e2e6ef; border-left-color: #a3adbd; }
+.calendario-leyenda { display: flex; flex-wrap: wrap; gap: 16px; padding: 16px 24px; border-top: 1px solid #e2e6ef; color: #65738b; font-size: 12px; }
+.calendario-leyenda > span { display: inline-flex; align-items: center; gap: 7px; }
+.calendario-leyenda > p { margin-left: auto; }
+.calendario-punto { width: 7px; height: 7px; border-radius: 50%; }
+.calendario-punto-disponible { background: #33b77a; }
+.calendario-punto-ocupado { background: #5364ff; }
+.calendario-punto-descanso { background: #a3adbd; }
+@media (max-width: 700px) {
+  .calendario-toolbar { grid-template-columns: 1fr auto; padding: 16px; }
+  .calendario-periodo { grid-row: 2; grid-column: 1 / -1; }
+  .calendario-leyenda { padding: 16px; }
+  .calendario-leyenda > p { margin-left: 0; }
+}

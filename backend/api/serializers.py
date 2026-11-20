@@ -9,6 +9,7 @@ from .models import (
     Factura, ItemPresupuesto, NotaCredito, Obra, Pago, Presupuesto, Usuario,
 )
 from .services import actualizar_totales_presupuesto, guardar_version_presupuesto
+from .disponibilidad import CHILE, validar_asignacion
 
 
 class UsuarioSerializer(serializers.ModelSerializer):
@@ -203,6 +204,8 @@ class PresupuestoSerializer(serializers.ModelSerializer):
 
 
 class ObraSerializer(serializers.ModelSerializer):
+    inicio_programado = serializers.DateTimeField(default_timezone=CHILE, required=False, allow_null=True)
+    fin_estimado = serializers.DateTimeField(default_timezone=CHILE, required=False, allow_null=True)
     tecnico_nombre = serializers.CharField(source='tecnico_responsable.get_full_name', read_only=True)
     cliente_nombre = serializers.CharField(source='presupuesto.cliente.razon_social', read_only=True)
     cliente_id = serializers.IntegerField(source='presupuesto.cliente_id', read_only=True)
@@ -219,17 +222,32 @@ class ObraSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def create(self, validated_data):
+        validar_asignacion(validated_data.get('tecnico_responsable').pk if validated_data.get('tecnico_responsable') else None,
+                           validated_data.get('inicio_programado'), validated_data.get('fin_estimado'))
+        validated_data['fecha_inicio'] = validated_data['inicio_programado'].astimezone(CHILE).date()
         validated_data['codigo_obra'] = f'TMP-{uuid.uuid4().hex[:20]}'
         obra = super().create(validated_data)
         obra.codigo_obra = f'OBR-{timezone.localdate().year}-{obra.pk:06d}'
         obra.save(update_fields=['codigo_obra', 'updated_at'])
         return obra
 
+    @transaction.atomic
     def update(self, instance, validated_data):
+        instance = Obra.objects.select_for_update().get(pk=instance.pk)
         if instance.estado_operativo in {'finalizada', 'cancelada'} or instance.estado_comercial == 'cerrada':
             campos_editables = {'observaciones_tecnicas', 'updated_by'}
             if set(validated_data) - campos_editables:
                 raise serializers.ValidationError({'estado': 'La obra está finalizada o cerrada; no se permiten cambios operativos ni financieros.'})
+        if {'tecnico_responsable', 'inicio_programado', 'fin_estimado'} & set(validated_data):
+            tecnico = validated_data.get('tecnico_responsable', instance.tecnico_responsable)
+            inicio = validated_data.get('inicio_programado', instance.inicio_programado)
+            fin = validated_data.get('fin_estimado', instance.fin_estimado)
+            if instance.estado_operativo == 'en-proceso':
+                validar_asignacion(tecnico.pk if tecnico else None, inicio, fin, instance.pk)
+            else:
+                from .disponibilidad import validar_rango
+                validar_rango(inicio, fin)
+            validated_data['fecha_inicio'] = inicio.astimezone(CHILE).date()
         return super().update(instance, validated_data)
 
     def validate_avance_porcentaje(self, value):

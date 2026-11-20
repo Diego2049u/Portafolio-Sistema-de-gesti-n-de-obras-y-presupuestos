@@ -146,6 +146,7 @@ def registrar_decision_cliente(presupuesto, decision, usuario):
 
 @transaction.atomic
 def transicionar_obra(obra, nuevo_estado, usuario, motivo=''):
+    obra = Obra.objects.select_for_update().get(pk=obra.pk)
     if nuevo_estado not in TRANSICIONES_OBRA.get(obra.estado_operativo, set()):
         raise ValidationError({'error': 'TRANSICION_NO_PERMITIDA', 'detalle': f"No se permite pasar de {obra.estado_operativo} a {nuevo_estado}."})
     if nuevo_estado == 'finalizada' and not obra.tecnico_responsable_id:
@@ -154,6 +155,9 @@ def transicionar_obra(obra, nuevo_estado, usuario, motivo=''):
         raise ValidationError({'error': 'FACTURAS_ASOCIADAS', 'detalle': 'No se puede cancelar una obra que ya tiene facturas emitidas, aunque todavía no estén pagadas.'})
     if nuevo_estado in {'suspendida', 'cancelada'} and not str(motivo).strip():
         raise ValidationError({'motivo': 'Indique el motivo de suspensión o cancelación.'})
+    if nuevo_estado == 'en-proceso':
+        from .disponibilidad import validar_asignacion
+        validar_asignacion(obra.tecnico_responsable_id, obra.inicio_programado, obra.fin_estimado, obra.pk)
 
     estado_anterior = obra.estado_operativo
     obra.estado_operativo = nuevo_estado
@@ -170,12 +174,15 @@ def transicionar_obra(obra, nuevo_estado, usuario, motivo=''):
 
 @transaction.atomic
 def reabrir_obra(obra, usuario, motivo):
+    obra = Obra.objects.select_for_update().get(pk=obra.pk)
     if obra.estado_operativo not in {'finalizada', 'cancelada', 'suspendida'}:
         raise ValidationError({'error': 'TRANSICION_NO_PERMITIDA', 'detalle': 'Solo se pueden reabrir obras suspendidas o en estado terminal.'})
     if obra.estado_comercial == 'cerrada' or Factura.objects.filter(obra=obra).exists():
         raise ValidationError({'error': 'HISTORIAL_FINANCIERO', 'detalle': 'No se puede reabrir una obra con facturas emitidas o cierre comercial.'})
     if not str(motivo).strip():
         raise ValidationError({'motivo': 'Indique el motivo de reapertura.'})
+    from .disponibilidad import validar_asignacion
+    validar_asignacion(obra.tecnico_responsable_id, obra.inicio_programado, obra.fin_estimado, obra.pk)
     anterior = obra.estado_operativo
     obra.estado_operativo = 'en-proceso'
     obra.estado_comercial = 'en_curso'

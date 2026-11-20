@@ -57,6 +57,13 @@ export const NAV_ITEMS = [
     roles: [ROLES.GERENCIA, ROLES.FINANZAS, ROLES.SUPERVISOR, ROLES.TECNICO]
   },
   {
+    id: 'mi-horario',
+    label: 'Mi horario',
+    icon: 'calendar_month',
+    path: '/mi-horario',
+    roles: [ROLES.TECNICO]
+  },
+  {
     id: 'presupuestos',
     label: 'Presupuestos y Costos',
     icon: 'request_quote',

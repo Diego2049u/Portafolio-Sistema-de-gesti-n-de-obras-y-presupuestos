@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 from decimal import Decimal
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase, APIClient
 
@@ -10,6 +11,7 @@ from .models import (
     Cliente,
     Factura,
     ItemPresupuesto,
+    NotaCredito,
     Obra,
     Pago,
     Presupuesto,
@@ -73,6 +75,7 @@ class FyagAPITestCase(APITestCase):
     def crear_obra(self, *, presupuesto=None, tecnico=None, estado='en-proceso', comercial='en_curso'):
         presupuesto = presupuesto or self.crear_presupuesto(estado='aprobado')
         return Obra.objects.create(
+            codigo_obra=f'OBR-TEST-{presupuesto.pk}',
             nombre_obra=f'Obra {presupuesto.numero_presupuesto}',
             presupuesto=presupuesto,
             tecnico_responsable=tecnico,
@@ -155,6 +158,32 @@ class RolePermissionTests(FyagAPITestCase):
 
         self.autenticar(self.gerencia)
         self.assertEqual(self.api.get('/api/auditoria/').status_code, status.HTTP_200_OK)
+
+
+class DashboardTests(FyagAPITestCase):
+    def test_actualizar_recalcula_ventas_netas_diarias(self):
+        self.autenticar(self.gerencia)
+        hoy = timezone.localdate()
+        ayer = hoy - timedelta(days=1)
+        filtros = {'desde': ayer, 'hasta': hoy, 'cliente_id': self.cliente.pk, 'actualizar': '1'}
+        endpoint = '/api/dashboard/resumen/'
+        inicial = self.api.get(endpoint, filtros)
+        self.assertEqual(inicial.status_code, status.HTTP_200_OK)
+        self.assertEqual(inicial.data['distribuciones']['ventas_netas_diarias'], [])
+
+        factura = self.crear_factura(self.crear_obra(), total=50000)
+        Factura.objects.filter(pk=factura.pk).update(fecha_emision=ayer)
+        NotaCredito.objects.create(factura=factura, numero='NC-DASH-001', monto=10000, motivo='Ajuste')
+        actualizado = self.api.get(endpoint, filtros)
+
+        self.assertEqual(actualizado.status_code, status.HTTP_200_OK)
+        serie = actualizado.data['distribuciones']['ventas_netas_diarias']
+        self.assertEqual(serie, [
+            {'fecha': ayer.isoformat(), 'monto_total': 50000},
+            {'fecha': hoy.isoformat(), 'monto_total': -10000},
+        ])
+        self.assertEqual(actualizado.data['metricas']['ventas_facturadas']['monto_total'], 40000)
+        self.assertEqual(self.api.get(endpoint, filtros).data, actualizado.data)
 
 
 class PresupuestoWorkflowTests(FyagAPITestCase):
@@ -423,5 +452,5 @@ class AuthenticationSecurityTests(FyagAPITestCase):
         self.assertEqual(login.status_code, status.HTTP_200_OK)
         access_cookie = login.cookies['fyag_access']
         self.assertTrue(access_cookie['httponly'])
-        self.assertEqual(access_cookie['max-age'], '900')
+        self.assertEqual(int(access_cookie['max-age']), 900)
         self.assertEqual(login.data['user']['role'], 'FINANZAS')

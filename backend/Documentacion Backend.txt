@@ -29,7 +29,7 @@ Comando para instalar dependencias:
 3. ARQUITECTURA DE DATOS Y REGLAS DE NEGOCIO IMPLEMENTADAS
 --------------------------------------------------------------------------------
 a) Modelo de Usuario Personalizado (`AUTH_USER_MODEL = 'api.Usuario'`)
-   - Soporte para roles de negocio: GERENCIA, FINANZAS, SUPERVISOR, TECNICO.
+   - Soporte para roles de negocio: ADMIN_GENERAL, GERENCIA, FINANZAS, SUPERVISOR, TECNICO.
    - Estados de cuenta: pendiente, activo, bloqueado.
 
 b) Motor de Reglas de Negocio - Cierre de Obras (RF-07)

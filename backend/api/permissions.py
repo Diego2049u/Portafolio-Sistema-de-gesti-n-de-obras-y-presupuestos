@@ -1,6 +1,7 @@
-from rest_framework.permissions import BasePermission
+from rest_framework.permissions import BasePermission, SAFE_METHODS
 
 
+ADMIN_GENERAL = 'ADMIN_GENERAL'
 GERENCIA = 'GERENCIA'
 FINANZAS = 'FINANZAS'
 SUPERVISOR = 'SUPERVISOR'
@@ -15,19 +16,21 @@ class RolePermission(BasePermission):
         user = request.user
         if not user or not user.is_authenticated or not user.is_active:
             return False
-        if user.is_superuser:
+        if user.is_superuser and user.rol != GERENCIA:
             return True
         if getattr(user, 'estado', None) != 'activo' or getattr(user, 'deleted_at', None):
             return False
+        if user.rol == GERENCIA:
+            return request.method in SAFE_METHODS
         allowed = self.role_actions.get(view.action, set())
-        return user.rol == GERENCIA or user.rol in allowed
+        return user.rol == ADMIN_GENERAL or user.rol in allowed
 
 
 class UserPermission(RolePermission):
     role_actions = {
-        'list': {GERENCIA}, 'retrieve': {GERENCIA}, 'create': {GERENCIA},
-        'update': {GERENCIA}, 'partial_update': {GERENCIA}, 'destroy': {GERENCIA},
-        'activar': {GERENCIA},
+        'list': {ADMIN_GENERAL}, 'retrieve': {ADMIN_GENERAL}, 'create': {ADMIN_GENERAL},
+        'update': {ADMIN_GENERAL}, 'partial_update': {ADMIN_GENERAL}, 'destroy': {ADMIN_GENERAL},
+        'activar': {ADMIN_GENERAL},
     }
 
 
@@ -50,8 +53,8 @@ class PresupuestoPermission(RolePermission):
         'list': {FINANZAS}, 'retrieve': {FINANZAS}, 'create': {FINANZAS},
         'update': {FINANZAS}, 'partial_update': {FINANZAS}, 'destroy': {FINANZAS},
         'exportar_pdf': {FINANZAS}, 'enviar': {FINANZAS},
-        'decision_cliente': {FINANZAS}, 'aprobar_gerencia': {GERENCIA},
-        'exigir_aprobacion': {GERENCIA}, 'historial_versiones': {FINANZAS},
+        'decision_cliente': {FINANZAS}, 'aprobar_gerencia': {ADMIN_GENERAL},
+        'exigir_aprobacion': {ADMIN_GENERAL}, 'historial_versiones': {FINANZAS},
     }
 
 
@@ -59,10 +62,17 @@ class ObraPermission(RolePermission):
     role_actions = {
         'list': {FINANZAS, SUPERVISOR, TECNICO}, 'retrieve': {FINANZAS, SUPERVISOR, TECNICO},
         'create': {SUPERVISOR}, 'update': {SUPERVISOR}, 'partial_update': {SUPERVISOR}, 'destroy': {SUPERVISOR},
-        'transicionar': {SUPERVISOR}, 'cerrar_comercial': {FINANZAS}, 'reabrir': {GERENCIA},
+        'transicionar': {SUPERVISOR}, 'cerrar_comercial': {FINANZAS}, 'reabrir': {ADMIN_GENERAL},
         'presupuestos_disponibles': {SUPERVISOR}, 'tecnicos_disponibles': {SUPERVISOR},
         'agenda_tecnico': {SUPERVISOR, TECNICO},
         'historial_estados': {FINANZAS, SUPERVISOR, TECNICO},
+    }
+
+
+class MaterialPermission(RolePermission):
+    role_actions = {
+        'list': {SUPERVISOR}, 'retrieve': {SUPERVISOR},
+        'materiales': {SUPERVISOR}, 'registrar_merma': {SUPERVISOR},
     }
 
 
@@ -93,16 +103,16 @@ class PagoPermission(RolePermission):
 class CategoriaServicioPermission(RolePermission):
     role_actions = {
         'list': {FINANZAS, SUPERVISOR, TECNICO}, 'retrieve': {FINANZAS, SUPERVISOR, TECNICO},
-        'create': {GERENCIA}, 'update': {GERENCIA}, 'partial_update': {GERENCIA}, 'destroy': {GERENCIA},
+        'create': {ADMIN_GENERAL}, 'update': {ADMIN_GENERAL}, 'partial_update': {ADMIN_GENERAL}, 'destroy': {ADMIN_GENERAL},
     }
 
 
 class AuditoriaPermission(RolePermission):
-    role_actions = {'list': {GERENCIA}, 'retrieve': {GERENCIA}}
+    pass
 
 
 class DashboardPermission(BasePermission):
-    allowed_roles = {GERENCIA, FINANZAS}
+    allowed_roles = {ADMIN_GENERAL, GERENCIA}
 
     def has_permission(self, request, view):
         user = request.user

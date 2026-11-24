@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 
 from django.db import transaction
 from django.utils import timezone
@@ -6,9 +7,10 @@ from rest_framework import serializers
 
 from .models import (
     AuditoriaLog, CategoriaServicio, Cliente, Contrato, CostoMaterial,
-    Factura, ItemPresupuesto, NotaCredito, Obra, Pago, Presupuesto, Usuario,
+    Factura, ItemPresupuesto, Material, MermaMaterial, Obra,
+    ObraMaterial, Pago, Presupuesto, Usuario,
 )
-from .services import actualizar_totales_presupuesto, guardar_version_presupuesto
+from .services import actualizar_totales_presupuesto, guardar_version_presupuesto, total_facturado_neto
 from .disponibilidad import CHILE, validar_asignacion
 
 
@@ -198,20 +200,63 @@ class PresupuestoSerializer(serializers.ModelSerializer):
         fields = super().get_fields()
         request = self.context.get('request')
         fields['numero_presupuesto'].read_only = True
-        if request and getattr(request.user, 'rol', None) != 'GERENCIA':
+        if request and getattr(request.user, 'rol', None) != 'ADMIN_GENERAL':
             fields['requiere_aprobacion_gerencia'].read_only = True
         return fields
 
 
+class MaterialSerializer(serializers.ModelSerializer):
+    servicios = serializers.ListField(
+        child=serializers.CharField(max_length=120), required=False, max_length=30,
+    )
+
+    class Meta:
+        model = Material
+        fields = ['id', 'nombre', 'unidad', 'servicios', 'activo']
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        instance = Material.objects.select_for_update().get(pk=instance.pk)
+        if validated_data.get('unidad', instance.unidad) != instance.unidad and ObraMaterial.objects.filter(material=instance).exists():
+            raise serializers.ValidationError({'unidad': 'La unidad ya se usa en una obra. Crea otro material para usar una unidad distinta.'})
+        return super().update(instance, validated_data)
+
+
+class ObraMaterialEntradaSerializer(serializers.Serializer):
+    material = serializers.PrimaryKeyRelatedField(queryset=Material.objects.filter(activo=True))
+    cantidad_planificada = serializers.DecimalField(max_digits=12, decimal_places=3, min_value=Decimal('0.001'))
+
+
+class MermaMaterialSerializer(serializers.ModelSerializer):
+    cantidad = serializers.DecimalField(max_digits=12, decimal_places=3, min_value=Decimal('0.001'))
+
+    class Meta:
+        model = MermaMaterial
+        fields = ['id', 'cantidad', 'motivo', 'fecha']
+        read_only_fields = ['id', 'fecha']
+
+
+class ObraMaterialSerializer(serializers.ModelSerializer):
+    material = MaterialSerializer(read_only=True)
+    mermas = MermaMaterialSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ObraMaterial
+        fields = ['id', 'material', 'cantidad_planificada', 'mermas']
+
+
 class ObraSerializer(serializers.ModelSerializer):
+    materiales = ObraMaterialEntradaSerializer(many=True, required=False, write_only=True, max_length=10)
     inicio_programado = serializers.DateTimeField(default_timezone=CHILE, required=False, allow_null=True)
     fin_estimado = serializers.DateTimeField(default_timezone=CHILE, required=False, allow_null=True)
     tecnico_nombre = serializers.CharField(source='tecnico_responsable.get_full_name', read_only=True)
     cliente_nombre = serializers.CharField(source='presupuesto.cliente.razon_social', read_only=True)
     cliente_id = serializers.IntegerField(source='presupuesto.cliente_id', read_only=True)
+    numero_presupuesto = serializers.CharField(source='presupuesto.numero_presupuesto', read_only=True)
     categoria_servicio_nombre = serializers.CharField(source='clasificacion_servicio.nombre', read_only=True)
     estado_operativo = serializers.CharField(read_only=True)
     estado_comercial = serializers.CharField(read_only=True)
+    puede_cerrar_comercial = serializers.BooleanField(read_only=True)
     fecha_termino = serializers.DateField(read_only=True)
     fecha_cierre_comercial = serializers.DateTimeField(read_only=True)
     deleted_at = serializers.DateTimeField(read_only=True)
@@ -222,6 +267,11 @@ class ObraSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def create(self, validated_data):
+        materiales = validated_data.pop('materiales', [])
+        ids = [item['material'].pk for item in materiales]
+        activos = list(Material.objects.select_for_update().filter(pk__in=ids, activo=True).order_by('pk'))
+        if len(activos) != len(ids):
+            raise serializers.ValidationError({'materiales': 'Uno de los materiales seleccionados ya no está activo.'})
         validar_asignacion(validated_data.get('tecnico_responsable').pk if validated_data.get('tecnico_responsable') else None,
                            validated_data.get('inicio_programado'), validated_data.get('fin_estimado'))
         validated_data['fecha_inicio'] = validated_data['inicio_programado'].astimezone(CHILE).date()
@@ -229,6 +279,7 @@ class ObraSerializer(serializers.ModelSerializer):
         obra = super().create(validated_data)
         obra.codigo_obra = f'OBR-{timezone.localdate().year}-{obra.pk:06d}'
         obra.save(update_fields=['codigo_obra', 'updated_at'])
+        ObraMaterial.objects.bulk_create([ObraMaterial(obra=obra, **item) for item in materiales])
         return obra
 
     @transaction.atomic
@@ -260,7 +311,7 @@ class ObraSerializer(serializers.ModelSerializer):
         fields['codigo_obra'].read_only = True
         request = self.context.get('request')
         if request and getattr(request.user, 'rol', None) == 'TECNICO':
-            for name in ('presupuesto', 'estado_comercial', 'fecha_cierre_comercial'):
+            for name in ('presupuesto', 'numero_presupuesto', 'estado_comercial', 'fecha_cierre_comercial'):
                 fields.pop(name, None)
         if self.instance:
             fields['codigo_obra'].read_only = True
@@ -269,6 +320,15 @@ class ObraSerializer(serializers.ModelSerializer):
         return fields
 
     def validate(self, attrs):
+        if 'materiales' in attrs:
+            request = self.context.get('request')
+            if request and request.user.rol not in {'ADMIN_GENERAL', 'SUPERVISOR'}:
+                raise serializers.ValidationError({'materiales': 'Tu rol no puede asignar materiales.'})
+            if self.instance is not None:
+                raise serializers.ValidationError({'materiales': 'Asigna los materiales al crear la obra.'})
+            ids = [item['material'].pk for item in attrs['materiales']]
+            if len(ids) != len(set(ids)):
+                raise serializers.ValidationError({'materiales': 'Selecciona cada material una sola vez.'})
         presupuesto = attrs.get('presupuesto', getattr(self.instance, 'presupuesto', None))
         tecnico = attrs.get('tecnico_responsable', getattr(self.instance, 'tecnico_responsable', None))
         categoria = attrs.get('clasificacion_servicio', getattr(self.instance, 'clasificacion_servicio', None))
@@ -346,13 +406,10 @@ class FacturaSerializer(serializers.ModelSerializer):
             cliente = obra.presupuesto.cliente
             if not cliente.habilitar_emision:
                 raise serializers.ValidationError({'obra': 'El cliente tiene deshabilitada la emisión de facturas.'})
-            from django.db.models import Sum
             facturas_obra = Factura.objects.filter(obra=obra)
             if self.instance:
                 facturas_obra = facturas_obra.exclude(pk=self.instance.pk)
-            facturado_bruto = facturas_obra.aggregate(total=Sum('monto_total'))['total'] or 0
-            notas_credito = NotaCredito.objects.filter(factura__obra=obra).aggregate(total=Sum('monto'))['total'] or 0
-            ya_facturado = facturado_bruto - notas_credito
+            ya_facturado = total_facturado_neto(facturas_obra)
             monto_nuevo = total if total is not None else getattr(self.instance, 'monto_total', 0)
             if ya_facturado + monto_nuevo > obra.presupuesto.monto_total:
                 raise serializers.ValidationError({'monto_total': 'La suma de facturas excedería el monto total aprobado del presupuesto.'})

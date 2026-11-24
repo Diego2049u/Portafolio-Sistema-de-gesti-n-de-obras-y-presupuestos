@@ -3,7 +3,9 @@ import { BrowserRouter, Link, Navigate, Route, Routes } from 'react-router-dom';
 import Auth from './pages/Auth';
 import loginBackground from './assets/background_logi.jpg';
 import Dashboard from './pages/Dashboard';
+import Reportes from './pages/Reportes';
 import ObrasProyectos from './pages/ObrasProyectos';
+import Recursos from './pages/Recursos';
 import PresupuestosCostos from './pages/PresupuestosCostos';
 import CostosMateriales from './pages/CostosMateriales';
 import FacturacionCobranza from './pages/FacturacionCobranza';
@@ -17,7 +19,9 @@ import { getDefaultPath, getRoleLabel, NAV_ITEMS, normalizeRole } from './config
 
 const PAGE_BY_ID = {
   dashboard: Dashboard,
+  reportes: Reportes,
   obras: ObrasProyectos,
+  recursos: Recursos,
   presupuestos: PresupuestosCostos,
   costos: CostosMateriales,
   facturacion: FacturacionCobranza,

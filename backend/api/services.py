@@ -6,7 +6,7 @@ from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from .audit_context import get_current_request
 from .models import AuditoriaLog, CategoriaServicio, Cliente, Contrato, CostoMaterial, Factura, NotaCredito, Obra, ObraEstadoHistorial, Pago, Presupuesto, ReversaPago, VersionPresupuesto
@@ -94,7 +94,7 @@ def guardar_version_presupuesto(presupuesto, usuario):
 @transaction.atomic
 def decidir_aprobacion_gerencia(presupuesto, decision, usuario):
     if not presupuesto.requiere_aprobacion_gerencia or presupuesto.aprobacion_gerencia != 'pendiente':
-        raise ValidationError({'error': 'TRANSICION_NO_PERMITIDA', 'detalle': 'Este presupuesto no está pendiente de aprobación de Gerencia.'})
+        raise ValidationError({'error': 'TRANSICION_NO_PERMITIDA', 'detalle': 'Este presupuesto no está pendiente de aprobación interna.'})
     if decision not in {'aprobada', 'rechazada'}:
         raise ValidationError({'decision': 'Use aprobada o rechazada.'})
     presupuesto.aprobacion_gerencia = decision
@@ -107,10 +107,10 @@ def decidir_aprobacion_gerencia(presupuesto, decision, usuario):
 @transaction.atomic
 def exigir_aprobacion_gerencia(presupuesto, usuario):
     if presupuesto.estado != 'borrador':
-        raise ValidationError({'error': 'TRANSICION_NO_PERMITIDA', 'detalle': 'Gerencia solo puede exigir aprobación mientras el presupuesto esté en borrador.'})
+        raise ValidationError({'error': 'TRANSICION_NO_PERMITIDA', 'detalle': 'La aprobación interna solo se puede exigir mientras el presupuesto esté en borrador.'})
     presupuesto.requiere_aprobacion_gerencia = True
     guardar_con_actor(presupuesto, usuario, ['requiere_aprobacion_gerencia'])
-    registrar_evento(usuario=usuario, modulo='Presupuestos', accion='exigir_aprobacion_gerencia', resultado='exito', detalle=f'Gerencia solicitó aprobar {presupuesto.numero_presupuesto} antes del envío al cliente.', entidad='Presupuesto', entidad_id=presupuesto.pk)
+    registrar_evento(usuario=usuario, modulo='Presupuestos', accion='exigir_aprobacion_gerencia', resultado='exito', detalle=f'Se solicitó aprobar {presupuesto.numero_presupuesto} antes del envío al cliente.', entidad='Presupuesto', entidad_id=presupuesto.pk)
     return presupuesto
 
 
@@ -194,28 +194,66 @@ def reabrir_obra(obra, usuario, motivo):
     return obra
 
 
+def total_facturado_neto(facturas):
+    bruto = facturas.aggregate(total=Sum('monto_total'))['total'] or Decimal('0')
+    creditos = NotaCredito.objects.filter(factura__in=facturas).aggregate(total=Sum('monto'))['total'] or Decimal('0')
+    return bruto - creditos
+
+
 @transaction.atomic
-def cerrar_obra_comercial(obra, usuario):
+def cerrar_obra_comercial(obra, usuario, *, motivo='', automatico=False):
+    obra = Obra.objects.select_for_update().get(pk=obra.pk)
     if obra.estado_operativo != 'finalizada':
+        if automatico:
+            return obra
         raise ValidationError({'error': 'OBRA_NO_FINALIZADA', 'detalle': 'La obra debe estar finalizada operativamente para cerrar su ciclo comercial.'})
     if obra.estado_comercial == 'cerrada':
+        if automatico:
+            return obra
         raise ValidationError({'error': 'OBRA_YA_CERRADA', 'detalle': 'La obra ya tiene su ciclo comercial cerrado.'})
     facturas = Factura.objects.filter(obra=obra)
     if not facturas.exists():
         raise ValidationError({'error': 'FACTURACION_PENDIENTE', 'detalle': 'Registre al menos una factura antes del cierre comercial.'})
     pendientes = facturas.filter(saldo_pendiente__gt=0)
-    if pendientes.exists():
-        saldo = sum((factura.saldo_pendiente for factura in facturas.filter(saldo_pendiente__gt=0)), Decimal('0'))
+    saldo = pendientes.aggregate(total=Sum('saldo_pendiente'))['total']
+    if saldo:
+        if automatico:
+            if obra.estado_comercial != 'pendiente_cobro':
+                obra.estado_comercial = 'pendiente_cobro'
+                guardar_con_actor(obra, usuario, ['estado_comercial'])
+            return obra
         raise ValidationError({'error': 'PAGOS_PENDIENTES', 'detalle': f'No se puede cerrar comercialmente la obra. Saldo pendiente: ${saldo:,.0f} CLP.'})
+    por_facturar = max(Decimal('0'), obra.presupuesto.monto_total - total_facturado_neto(facturas))
+    if por_facturar:
+        if automatico:
+            obra.estado_comercial = 'pendiente_facturacion'
+            guardar_con_actor(obra, usuario, ['estado_comercial'])
+            return obra
+        if usuario.rol != 'FINANZAS':
+            raise PermissionDenied('Solo Finanzas puede cerrar una obra con un importe por facturar.')
+        if not motivo.strip():
+            raise ValidationError({
+                'error': 'MOTIVO_CIERRE_REQUERIDO',
+                'detalle': f'Quedan ${por_facturar:,.0f} CLP por facturar. Indique el motivo del cierre.',
+            })
     obra.estado_comercial = 'cerrada'
     obra.fecha_cierre_comercial = timezone.now()
     guardar_con_actor(obra, usuario, ['estado_comercial', 'fecha_cierre_comercial'])
-    registrar_evento(usuario=usuario, modulo='Obras y Proyectos', accion='cierre_comercial_obra', resultado='exito', detalle=f"Se cerró comercialmente la obra {obra.codigo_obra}.", entidad='Obra', entidad_id=obra.pk)
+    detalle = f'Se cerró comercialmente la obra {obra.codigo_obra}.'
+    if por_facturar:
+        detalle += f' Importe sin facturar: ${por_facturar:,.0f} CLP. Motivo: {motivo.strip()}'
+    registrar_evento(
+        usuario=usuario, modulo='Obras y Proyectos', accion='cierre_comercial_obra',
+        resultado='exito', detalle=detalle,
+        entidad='Obra', entidad_id=obra.pk,
+        valores_nuevos={'motivo': motivo.strip(), 'monto_sin_facturar': por_facturar},
+    )
     return obra
 
 
 @transaction.atomic
 def registrar_pago(factura, datos, usuario):
+    obra = Obra.objects.select_for_update().get(pk=factura.obra_id)
     factura = Factura.objects.select_for_update().get(pk=factura.pk)
     monto = Decimal(str(datos['monto']))
     if monto <= 0:
@@ -229,14 +267,7 @@ def registrar_pago(factura, datos, usuario):
     factura.estado_pago = 'PAGADO' if factura.saldo_pendiente == 0 else 'PARCIAL'
     guardar_con_actor(factura, usuario, ['saldo_pendiente', 'estado_pago'])
 
-    obra = factura.obra
-    facturas_activas = Factura.objects.filter(obra=obra)
-    if facturas_activas.exists() and not facturas_activas.filter(saldo_pendiente__gt=0).exists():
-        if obra.estado_operativo == 'finalizada' and obra.estado_comercial != 'cerrada':
-            cerrar_obra_comercial(obra, usuario)
-    elif obra.estado_operativo == 'finalizada':
-        obra.estado_comercial = 'pendiente_cobro'
-        guardar_con_actor(obra, usuario, ['estado_comercial'])
+    cerrar_obra_comercial(obra, usuario, automatico=True)
 
     registrar_evento(usuario=usuario, modulo='Facturación y Cobranza', accion='registrar_pago', resultado='exito', detalle=f"Pago registrado para factura {factura.numero_factura}.", entidad='Pago', entidad_id=pago.pk, valores_anteriores={'saldo_pendiente': saldo_anterior, 'estado_pago': estado_anterior}, valores_nuevos={'saldo_pendiente': factura.saldo_pendiente, 'estado_pago': factura.estado_pago, 'pago_id': pago.pk})
     return pago
@@ -244,6 +275,7 @@ def registrar_pago(factura, datos, usuario):
 
 @transaction.atomic
 def registrar_nota_credito(factura, *, numero, monto, motivo, usuario):
+    obra = Obra.objects.select_for_update().get(pk=factura.obra_id)
     factura = Factura.objects.select_for_update().get(pk=factura.pk)
     monto = Decimal(str(monto))
     if monto <= 0 or monto > factura.saldo_pendiente:
@@ -254,17 +286,14 @@ def registrar_nota_credito(factura, *, numero, monto, motivo, usuario):
     factura.saldo_pendiente -= monto
     factura.estado_pago = 'SALDADO' if factura.saldo_pendiente == 0 else 'PARCIAL'
     guardar_con_actor(factura, usuario, ['saldo_pendiente', 'estado_pago'])
-    obra = factura.obra
-    facturas_obra = Factura.objects.filter(obra=obra)
-    if obra.estado_operativo == 'finalizada' and facturas_obra.exists() and not facturas_obra.filter(saldo_pendiente__gt=0).exists():
-        if obra.estado_comercial != 'cerrada':
-            cerrar_obra_comercial(obra, usuario)
+    cerrar_obra_comercial(obra, usuario, automatico=True)
     registrar_evento(usuario=usuario, modulo='Facturación y Cobranza', accion='emitir_nota_credito', resultado='exito', detalle=f'Nota de crédito {numero} registrada para {factura.numero_factura}.', entidad='NotaCredito', entidad_id=nota.pk, valores_anteriores={'saldo_pendiente': saldo_anterior, 'estado_pago': estado_anterior}, valores_nuevos={'saldo_pendiente': factura.saldo_pendiente, 'estado_pago': factura.estado_pago, 'nota_credito_id': nota.pk})
     return nota
 
 
 @transaction.atomic
 def revertir_pago(pago, *, monto, motivo, usuario):
+    obra = Obra.objects.select_for_update().get(pk=pago.factura.obra_id)
     factura = Factura.objects.select_for_update().get(pk=pago.factura_id)
     monto = Decimal(str(monto))
     ya_revertido = pago.reversiones.aggregate(total=Sum('monto'))['total'] or Decimal('0')
@@ -276,8 +305,7 @@ def revertir_pago(pago, *, monto, motivo, usuario):
     factura.saldo_pendiente += monto
     factura.estado_pago = 'PENDIENTE' if factura.saldo_pendiente == factura.monto_total else 'PARCIAL'
     guardar_con_actor(factura, usuario, ['saldo_pendiente', 'estado_pago'])
-    obra = factura.obra
-    if obra.estado_comercial == 'cerrada':
+    if obra.estado_operativo == 'finalizada':
         obra.estado_comercial = 'pendiente_cobro'
         obra.fecha_cierre_comercial = None
         guardar_con_actor(obra, usuario, ['estado_comercial', 'fecha_cierre_comercial'])

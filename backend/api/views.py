@@ -1,8 +1,9 @@
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 from django.db import transaction
 from django.core.cache import cache
 from django.core.serializers.json import DjangoJSONEncoder
 from django.http import HttpResponse
+from django.shortcuts import get_object_or_404
 from django.utils.dateparse import parse_date
 import hashlib
 import json
@@ -14,19 +15,22 @@ from rest_framework.views import APIView
 
 from .dashboard import construir_resumen_dashboard
 from .dashboard_serializers import DashboardFiltroSerializer
-from .models import AuditoriaLog, CategoriaServicio, Cliente, Contrato, CostoMaterial, Factura, Obra, Pago, Presupuesto, Usuario
+from .models import (
+    AuditoriaLog, CategoriaServicio, Cliente, Contrato, CostoMaterial, Factura, Material,
+    Obra, ObraEstadoHistorial, ObraMaterial, Pago, Presupuesto, Usuario, VersionPresupuesto,
+)
 from .permissions import (
     AuditoriaPermission, CategoriaServicioPermission, ClientePermission,
-    ContratoPermission, CostoPermission, FacturaPermission, ObraPermission,
+    ContratoPermission, CostoPermission, FacturaPermission, MaterialPermission, ObraPermission,
     PagoPermission, PresupuestoPermission, UserPermission, DashboardPermission,
 )
 from .serializers import (
     AuditoriaLogSerializer, CategoriaServicioSerializer, ClienteSerializer,
     ContratoSerializer, CostoMaterialSerializer, EstablecerPasswordSerializer, FacturaSerializer,
-    NotaCreditoSerializer, ObraSerializer, PagoSerializer, PresupuestoSerializer,
+    MaterialSerializer, MermaMaterialSerializer, NotaCreditoSerializer, ObraMaterialSerializer,
+    ObraSerializer, PagoSerializer, PresupuestoSerializer,
     ReversaPagoSerializer, UsuarioSerializer,
 )
-from .models import ObraEstadoHistorial, VersionPresupuesto
 from .services import (
     cerrar_obra_comercial, decidir_aprobacion_gerencia, exigir_aprobacion_gerencia, registrar_decision_cliente,
     registrar_evento, registrar_pago, enviar_presupuesto, soft_delete_instance,
@@ -160,7 +164,7 @@ class UsuarioViewSet(AuditedModelViewSet):
 
 
 class ClienteViewSet(AuditedModelViewSet):
-    queryset = Cliente.objects.all().order_by('razon_social')
+    queryset = Cliente.objects.order_by('razon_social', 'pk')
     serializer_class = ClienteSerializer
     permission_classes = [ClientePermission]
     module_name = 'Clientes y Contratos'
@@ -209,7 +213,7 @@ class CategoriaServicioViewSet(AuditedModelViewSet):
 
 
 class PresupuestoViewSet(AuditedModelViewSet):
-    queryset = Presupuesto.objects.select_related('cliente', 'categoria_servicio').prefetch_related('items').all()
+    queryset = Presupuesto.objects.select_related('cliente', 'categoria_servicio').prefetch_related('items').order_by('pk')
     serializer_class = PresupuestoSerializer
     permission_classes = [PresupuestoPermission]
     module_name = 'Presupuestos'
@@ -267,14 +271,57 @@ class PresupuestoViewSet(AuditedModelViewSet):
         return response
 
 
+class MaterialViewSet(AuditedModelViewSet):
+    queryset = Material.objects.all()
+    serializer_class = MaterialSerializer
+    permission_classes = [MaterialPermission]
+    http_method_names = ['get', 'post', 'patch', 'head', 'options']
+    module_name = 'Recursos'
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if self.request.query_params.get('activo') == '1':
+            queryset = queryset.filter(activo=True)
+        return queryset
+
+
 class ObraViewSet(AuditedModelViewSet):
-    queryset = Obra.objects.select_related('presupuesto__cliente', 'tecnico_responsable', 'clasificacion_servicio').all()
+    queryset = Obra.objects.select_related('presupuesto__cliente', 'tecnico_responsable', 'clasificacion_servicio').order_by('pk')
     serializer_class = ObraSerializer
     permission_classes = [ObraPermission]
     module_name = 'Obras y Proyectos'
 
+    @action(detail=True, methods=['get'], url_path='materiales', permission_classes=[MaterialPermission])
+    def materiales(self, request, pk=None):
+        asignaciones = self.get_object().materiales.select_related('material').prefetch_related('mermas')
+        return Response(ObraMaterialSerializer(asignaciones, many=True).data)
+
+    @action(detail=True, methods=['post'], url_path=r'materiales/(?P<asignacion_id>[0-9]+)/mermas',
+            permission_classes=[MaterialPermission])
+    @transaction.atomic
+    def registrar_merma(self, request, pk=None, asignacion_id=None):
+        obra = get_object_or_404(Obra.objects.select_for_update(), pk=self.get_object().pk)
+        if obra.estado_operativo != 'en-proceso' or obra.estado_comercial == 'cerrada':
+            raise ValidationError({'obra': 'Solo puedes registrar merma en una obra en proceso.'})
+        asignacion = get_object_or_404(ObraMaterial, pk=asignacion_id, obra=obra)
+        serializer = MermaMaterialSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        merma = serializer.save(asignacion=asignacion, registrado_por=request.user)
+        registrar_evento(usuario=request.user, modulo='Recursos', accion='crear', resultado='exito',
+                        detalle=f'Merma registrada en {obra.codigo_obra}.', entidad='MermaMaterial',
+                        entidad_id=merma.pk, valores_nuevos=self.snapshot_instance(merma))
+        return Response(serializer.data, status=201)
+
     def get_queryset(self):
         queryset = super().get_queryset()
+        if self.request.user.rol in {'ADMIN_GENERAL', 'FINANZAS'}:
+            facturas = Factura.objects.filter(obra_id=OuterRef('pk'))
+            queryset = queryset.annotate(
+                puede_cerrar_comercial=(
+                    Q(estado_operativo='finalizada') & ~Q(estado_comercial='cerrada')
+                    & Exists(facturas) & ~Exists(facturas.filter(saldo_pendiente__gt=0))
+                ),
+            )
         if self.request.user.rol == 'TECNICO':
             queryset = queryset.filter(tecnico_responsable=self.request.user)
         params = self.request.query_params
@@ -337,12 +384,13 @@ class ObraViewSet(AuditedModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='cerrar-comercial')
     def cerrar_comercial(self, request, pk=None):
-        obra = cerrar_obra_comercial(self.get_object(), request.user)
+        motivo = serializers.CharField(allow_blank=True, max_length=1000).run_validation(request.data.get('motivo', ''))
+        obra = cerrar_obra_comercial(self.get_object(), request.user, motivo=motivo)
         return Response(self.get_serializer(obra).data)
 
 
 class CostoMaterialViewSet(AuditedModelViewSet):
-    queryset = CostoMaterial.objects.select_related('obra').all()
+    queryset = CostoMaterial.objects.select_related('obra').order_by('pk')
     serializer_class = CostoMaterialSerializer
     permission_classes = [CostoPermission]
     module_name = 'Costos de obra'
@@ -360,7 +408,7 @@ class CostoMaterialViewSet(AuditedModelViewSet):
 
 
 class FacturaViewSet(AuditedModelViewSet):
-    queryset = Factura.objects.select_related('obra__presupuesto__cliente').all()
+    queryset = Factura.objects.select_related('obra__presupuesto__cliente').order_by('pk')
     serializer_class = FacturaSerializer
     permission_classes = [FacturaPermission]
     module_name = 'Facturación y Cobranza'
@@ -388,7 +436,7 @@ class FacturaViewSet(AuditedModelViewSet):
 
 
 class PagoViewSet(AuditedModelViewSet):
-    queryset = Pago.objects.select_related('factura').all()
+    queryset = Pago.objects.select_related('factura').order_by('pk')
     serializer_class = PagoSerializer
     permission_classes = [PagoPermission]
     module_name = 'Facturación y Cobranza'
@@ -455,6 +503,6 @@ class DashboardResumenView(APIView):
             cached = cache.get(clave)
             if cached is not None:
                 return Response(cached)
-        data = construir_resumen_dashboard(**filtros.validated_data)
+        data = construir_resumen_dashboard(incluir_merma=request.user.rol in {'ADMIN_GENERAL', 'GERENCIA'}, **filtros.validated_data)
         cache.set(clave, data, timeout=15)
         return Response(data)

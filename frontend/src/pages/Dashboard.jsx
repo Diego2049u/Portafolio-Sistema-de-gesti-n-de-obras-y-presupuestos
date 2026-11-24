@@ -141,6 +141,16 @@ export default function Dashboard() {
         <MetricCard title="Servicios realizados" accent="bg-teal-700" value={data ? m.servicios_realizados : '—'} />
       </section>
 
+      {data?.merma_materiales && <section className="rounded-xl bg-surface-container-lowest p-4 shadow-sm" aria-labelledby="titulo-merma">
+        <h2 id="titulo-merma" className="text-xl font-bold">Merma de materiales</h2>
+        <p className="mt-1">{data.merma_materiales.obras_con_merma} obras con merma registrada en el período</p>
+        {data.merma_materiales.por_material.length > 0 && <ul className="mt-3 divide-y divide-surface-container">
+          {data.merma_materiales.por_material.map((row) => <li key={row.id} className="flex justify-between gap-3 py-2">
+            <span>{row.nombre}</span><span>{Number(row.cantidad).toLocaleString('es-CL')} {row.unidad}</span>
+          </li>)}
+        </ul>}
+      </section>}
+
       <section aria-label="Ventas y presupuestos" aria-busy={loading} className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <SalesTrend period={period} series={d.ventas_netas_diarias} total={m.ventas_facturadas?.monto_total} format={clp} loading={loading} />
         <BudgetBreakdown ready={Boolean(data)}

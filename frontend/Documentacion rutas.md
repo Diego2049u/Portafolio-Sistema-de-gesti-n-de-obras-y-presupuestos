@@ -16,12 +16,13 @@ RUTAS
 
 ASIGNACIÓN ACTUAL DE MÓDULOS
 ----------------------------
-- Gerencia: todos los módulos.
+- Administrador general: gestión de todos los módulos operativos.
+- Gerencia: Dashboard y consulta de los demás módulos operativos.
 - Finanzas: Dashboard, Obras y Proyectos, Presupuestos y Costos, Costos y Materiales, Facturación y Cobranza, Clientes y Contratos.
 - Supervisor: Obras y Proyectos, Costos y Materiales, Clientes y Contratos, Disponibilidad de Técnicos.
 - Técnico: Obras y Proyectos.
 
-El primer módulo habilitado para cada rol es su ruta de inicio: Dashboard para Gerencia y Finanzas; Obras y Proyectos para Supervisor y Técnico. Un rol sin módulos permitidos no recibe el menú completo por defecto.
+El primer módulo habilitado para cada rol es su ruta de inicio. Administrador general y Gerencia inician en Dashboard. Finanzas, Supervisor y Técnico inician en Obras y Proyectos. Un rol sin módulos permitidos no recibe el menú completo por defecto.
 
 COMPORTAMIENTO
 --------------
@@ -33,6 +34,6 @@ COMPORTAMIENTO
 
 SEGURIDAD Y SIGUIENTE INTEGRACIÓN
 ---------------------------------
-Las guardas y el sidebar controlan la navegación en el cliente. No sustituyen los permisos de la API. El usuario de demostración de `App.jsx` aún simula una sesión de Gerencia y `Auth.jsx` todavía no carga la sesión real. En la integración posterior se debe obtener el rol desde la sesión autenticada por cookies HttpOnly, restaurar la sesión al recargar y mantener la autorización correspondiente en el backend.
+Las guardas y el sidebar controlan la navegación en el cliente. No sustituyen los permisos de la API. La aplicación usa el rol devuelto por la sesión autenticada de la API. Los módulos de Gerencia mantienen los controles de consulta y ocultan las acciones que modifican registros.
 
 Para cambiar la asignación de módulos, editar el arreglo `NAV_ITEMS`; no duplicar matrices independientes en Sidebar y App.

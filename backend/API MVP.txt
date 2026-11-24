@@ -73,9 +73,9 @@ PDF de presupuesto: `GET /api/presupuestos/{id}/exportar-pdf/` descarga `applica
 
 MATRIZ DE ACCESO DEL CONTRATO
 -----------------------------
-Gerencia tiene bypass total en la API, incluida la administración y activación de usuarios. Esta regla es una decisión explícita del MVP. La interfaz oculta páginas y acciones según rol, pero esa presentación nunca sustituye los permisos del backend.
+Administrador general tiene acceso a todas las operaciones disponibles en la API, incluida la administración y activación de usuarios. Gerencia puede consultar todos los módulos y descargar PDF. La API limita Gerencia a métodos de lectura y la interfaz oculta sus acciones de escritura.
 
-| Módulo / capacidad | Gerencia | Finanzas | Supervisor | Técnico |
+| Módulo / capacidad | Administrador general | Finanzas | Supervisor | Técnico |
 |--------------------|----------|----------|------------|---------|
 | Usuarios y activación | Administración total | Sin acceso | Sin acceso | Sin acceso |
 | Clientes | CRUD | CRUD | Solo lectura | Sin acceso |
@@ -86,25 +86,25 @@ Gerencia tiene bypass total en la API, incluida la administración y activación
 | Costos de obra | CRUD | CRUD | CRUD | Sin acceso |
 | Facturas | CRUD + notas de crédito | CRUD + notas de crédito | Sin acceso | Sin acceso |
 | Pagos | Lectura + registro + reversas; no editar/eliminar | Lectura + registro + reversas; no editar/eliminar | Sin acceso | Sin acceso |
-| Dashboard | Lectura | Lectura | Sin acceso | Sin acceso |
+| Dashboard | Lectura | Sin acceso | Sin acceso | Sin acceso |
 | Auditoría | Lectura | Sin acceso | Sin acceso | Sin acceso |
 | Disponibilidad/carga de técnicos | Lectura | Sin acceso | Lectura | Sin acceso |
 
 Precisiones para las páginas del frontend:
-- La página Clientes y Contratos puede mostrarse al Supervisor solo en modo de lectura de clientes; las operaciones de contratos siguen restringidas a Gerencia y Finanzas.
-- La administración de usuarios existe en la API para Gerencia, pero todavía no tiene página en la navegación del frontend.
+- La página Clientes y Contratos puede mostrarse al Supervisor solo en modo de lectura de clientes; Administrador general y Finanzas gestionan contratos, y Gerencia puede consultarlos.
+- La administración de usuarios existe en la API para Administrador general, pero todavía no tiene página en la navegación del frontend.
 - El backend ofrece CRUD de contratos, pero la página actual aún no expone una gestión de contratos completa.
 - Técnico solo recibe obras asignadas en los listados y detalles de obras. La restricción se aplica también al historial de estados.
 - La página de Técnicos representa carga actual (`obras_activas`), no disponibilidad de calendario.
-- Aunque Gerencia tiene bypass en backend, el frontend debe permitirle las acciones de Gerencia indicadas en esta matriz y no ocultarlas por comprobar exclusivamente `role === 'FINANZAS'`.
+- Administrador general puede ejecutar las acciones de gestión disponibles en el frontend.
 
 ESTADOS Y ETIQUETAS CANÓNICAS
 ----------------------------
 Los valores entre paréntesis son los valores de API/BD; las etiquetas en español son las que debe presentar la interfaz. El frontend no debe inventar estados adicionales ni enviar etiquetas como si fueran valores de API.
 
 - Presupuesto, decisión comercial: Borrador (`borrador`) → Enviado al cliente (`enviado`) → Aprobado por el cliente (`aprobado`) o Rechazado por el cliente (`rechazado`). Rechazado es terminal; los cambios solicitados requieren crear otro presupuesto.
-- Presupuesto, revisión interna separada: No requerida (`no_requerida`), Pendiente (`pendiente`), Aprobada (`aprobada`) o Rechazada (`rechazada`). Si Gerencia exige revisión mientras está en borrador, el envío lo deja en Pendiente de aprobación interna (`pendiente_gerencia`). Tras aprobar Gerencia pasa a `enviado`; al rechazar Gerencia vuelve a `borrador`. No existe umbral monetario automático acordado.
-- Obra, estado operativo: En proceso (`en-proceso`), Finalizada (`finalizada`), Suspendida (`suspendida`) o Cancelada (`cancelada`). Transiciones: `en-proceso` → `finalizada`, `suspendida` o `cancelada`; `suspendida` → `en-proceso` o `cancelada`. Finalizada y cancelada son terminales salvo reapertura autorizada a Gerencia.
+- Presupuesto, revisión interna separada: No requerida (`no_requerida`), Pendiente (`pendiente`), Aprobada (`aprobada`) o Rechazada (`rechazada`). Si el Administrador general exige revisión mientras está en borrador, el envío lo deja en Pendiente de aprobación interna (`pendiente_gerencia`). La aprobación interna mueve el presupuesto a `enviado` y el rechazo lo devuelve a `borrador`. No existe umbral monetario automático acordado.
+- Obra, estado operativo: En proceso (`en-proceso`), Finalizada (`finalizada`), Suspendida (`suspendida`) o Cancelada (`cancelada`). Transiciones: `en-proceso` → `finalizada`, `suspendida` o `cancelada`; `suspendida` → `en-proceso` o `cancelada`. Finalizada y cancelada son terminales salvo reapertura autorizada al Administrador general.
 - Obra, estado comercial independiente: En curso (`en_curso`), Pendiente de facturación (`pendiente_facturacion`), Pendiente de cobro (`pendiente_cobro`) o Cerrada comercialmente (`cerrada`). Una obra puede estar operativamente finalizada mientras su estado comercial sigue pendiente.
 - Factura: Pendiente de cobro (`PENDIENTE`), Pago parcial (`PARCIAL`), Pagada (`PAGADO`) o Saldo cubierto con nota de crédito (`SALDADO`). `PAGADO` indica saldo cubierto por pagos; `SALDADO`, por nota de crédito.
 - Usuario: Pendiente de activación (`pendiente`), Activo (`activo`) o Bloqueado (`bloqueado`). Solo usuarios activos y no eliminados pueden autenticarse.
@@ -125,7 +125,7 @@ Estas reglas no se deben inventar durante la integración. Si una pantalla o end
 - Si las fechas de término de un contrato deben ser posteriores o iguales a la fecha de inicio cuando ambas estén informadas.
 - Si la fecha de vencimiento de una factura debe ser posterior a la fecha de emisión y si se aceptan pagos con fecha futura.
 - La política técnica de idempotencia para registrar pagos (por ejemplo, identificador de operación para reintentos/doble envío), preservando el rechazo de sobrepagos y la inmutabilidad del pago registrado.
-- Umbral o criterio para exigir aprobación gerencial automática. Por ahora solo Gerencia puede exigirla manualmente mientras el presupuesto está en borrador.
+- Umbral o criterio para exigir aprobación gerencial automática. Por ahora solo Administrador general puede exigirla manualmente mientras el presupuesto está en borrador.
 
 REGLAS CENTRALES
 ----------------
@@ -134,14 +134,14 @@ REGLAS CENTRALES
 - No se puede finalizar una obra sin técnico responsable ni cancelar una obra con cualquier factura emitida, pagada o impaga.
 - Los importes del presupuesto se calculan a partir de sus partidas; saldo y estado de factura se actualizan al registrar pagos.
 - Los DELETE de recursos de negocio son borrados lógicos. No se permite eliminar una factura con pagos/saldo, un presupuesto vinculado a una obra ni una obra con facturas o gastos. Los pagos son inmutables por API.
-- Los eventos de auditoría son append-only desde la API y solo Gerencia puede consultarlos.
+- Los eventos de auditoría son append-only desde la API y se pueden consultar con los roles Administrador general y Gerencia.
 
 RESUMEN DEL DASHBOARD
 ---------------------
-El resumen está disponible para Gerencia y Finanzas. Si no se envían fechas, consulta desde el primer día del mes actual hasta hoy. El rango máximo es de 367 días calendario inclusive.
+El resumen está disponible para Administrador general y Gerencia. Si no se envían fechas, consulta desde el primer día del mes actual hasta hoy. El rango máximo es de 367 días calendario inclusive.
 - `ventas_facturadas`: suma el monto total de las facturas emitidas en el periodo, no los pagos recibidos.
 - `presupuestos_aprobados`: cuenta y suma presupuestos cuya decisión del cliente fue aprobatoria durante el periodo.
-- `presupuestos_pendientes`: cuenta y suma presupuestos enviados al cliente o pendientes de aprobación de Gerencia, emitidos durante el periodo. Los borradores no cuentan como pendientes.
+- `presupuestos_pendientes`: cuenta y suma presupuestos enviados al cliente o pendientes de aprobación interna, emitidos durante el periodo. Los borradores no cuentan como pendientes.
 - `obras_en_proceso`: cuenta las obras que actualmente tienen estado operativo `en-proceso`; no reconstruye estados históricos.
 - `servicios_realizados`: cuenta las obras finalizadas cuya fecha de término cae dentro del periodo.
 - `costos_directos_periodo`: suma los registros activos de `CostoMaterial` fechados dentro del periodo. También se devuelve el desglose mensual y por categoría.
@@ -171,7 +171,7 @@ AJUSTES DE INTEGRIDAD Y SEGURIDAD (2026-11)
 - `POST /api/pagos/{id}/reversas/` recibe `monto` y `motivo`. Registra una compensación sin alterar ni borrar el pago original; el total revertido no puede exceder el pago.
 - Las entidades basadas en `SoftDeleteModel` guardan `created_at`, `updated_at`, `created_by` y `updated_by`.
 - Throttling: API anónima 60 solicitudes/hora, autenticada 1200 solicitudes/hora, y login 5 intentos/minuto por IP.
-- Gerencia mantiene bypass total de permisos, incluida la administración de usuarios. Supervisor opera obras y costos sin acceso al detalle financiero de presupuestos; puede asociar un presupuesto aprobado desde el endpoint reducido de disponibles. Esta separación sigue la matriz de roles acordada.
+- Administrador general tiene acceso completo, incluida la administración de usuarios. Supervisor opera obras y costos sin acceso al detalle financiero de presupuestos; puede asociar un presupuesto aprobado desde el endpoint reducido de disponibles. Esta separación sigue la matriz de roles acordada.
 - El límite de facturación compara el total acumulado de facturas menos notas de crédito emitidas; permite re-facturar montos efectivamente acreditados sin sobrepasar el presupuesto aprobado.
 - `ventas_facturadas.monto_total` del dashboard ahora es neto de notas de crédito emitidas en el periodo; también expone bruto, total acreditado y cantidades separadas.
 - No se agregó exportación CSV ni Excel. Excel queda para una etapa posterior; el PDF de presupuestos existente se conserva.
@@ -180,13 +180,13 @@ AJUSTES DE INTEGRIDAD Y SEGURIDAD (2026-11)
 
 WORKFLOWS Y DASHBOARD - AJUSTES (2026-11)
 ----------------------------------------
-- Gerencia puede usar `POST /api/presupuestos/{id}/exigir-aprobacion-gerencia/` mientras el presupuesto siga en borrador. Finanzas crea y envía el presupuesto; si Gerencia exigió revisión, el envío queda en `pendiente_gerencia`. No existe un umbral monetario automático porque el negocio no ha definido ese monto.
+- Administrador general puede usar `POST /api/presupuestos/{id}/exigir-aprobacion-gerencia/` mientras el presupuesto siga en borrador. Finanzas crea y envía el presupuesto; si el Administrador general exigió revisión, el envío queda en `pendiente_gerencia`. No existe un umbral monetario automático porque el negocio no ha definido ese monto.
 - Un presupuesto rechazado por el cliente es terminal. Si el cliente solicita cambios se crea otro presupuesto; no se reabre ni se edita el rechazado.
 - `GET /api/presupuestos/{id}/historial-versiones/` devuelve versiones inmutables con snapshots de los datos y partidas. Se registra la versión inicial y cada edición permitida en borrador.
 - `fecha_vencimiento`, cuando se informa, debe ser posterior a la fecha de emisión.
 - `numero_presupuesto`, `codigo_obra` y `numero_factura` son correlativos automáticos por tipo y año (`PRE-AAAA-######`, `OBR-AAAA-######`, `FAC-AAAA-######`); no se aceptan en el cuerpo de creación.
 - No se puede cancelar una obra con facturas emitidas, estén pagadas o no. Suspensión y cancelación requieren `motivo`, que queda en el historial de estados.
-- Una obra finalizada o cerrada comercialmente no admite cambios operativos ni nuevos/actualizados costos; solo se pueden corregir observaciones técnicas. Gerencia puede reabrir una obra suspendida/finalizada/cancelada con motivo, si no tiene facturas ni cierre comercial. La reapertura conserva los estados previos en el historial.
+- Una obra finalizada o cerrada comercialmente no admite cambios operativos ni nuevos/actualizados costos; solo se pueden corregir observaciones técnicas. Administrador general puede reabrir una obra suspendida/finalizada/cancelada con motivo, si no tiene facturas ni cierre comercial. La reapertura conserva los estados previos en el historial.
 - El pago de la última factura y la nota de crédito que deja el saldo en cero llaman al flujo común `cerrar_obra_comercial`, con una sola transición y el mismo evento de auditoría.
 - El dashboard incluye cartera total, vencida y antigüedad (1-30, 31-60, 61-90 y más de 90 días), recaudación neta de reversiones, carga de obras por técnico, top 10 clientes por venta/deuda, proyección restante de presupuestos aprobados, presupuestos que vencen en 7 días y conversión de decisiones.
 - `cuentas_por_cobrar` es una foto al día de hoy y no depende de `desde/hasta`; `recaudacion_periodo`, ventas y conversión sí usan el periodo seleccionado. La proyección es el saldo aún no facturado de presupuestos aprobados dentro del periodo consultado; no equivale a flujo de caja garantizado.
@@ -194,7 +194,7 @@ WORKFLOWS Y DASHBOARD - AJUSTES (2026-11)
 - Los filtros de técnico/estado mantienen el alcance documentado: los KPI de presupuestos quedan limitados a presupuestos asociados a las obras que cumplen esos filtros; presupuestos aún sin obra quedan fuera de esos KPI.
 - No se muestra margen/rentabilidad hasta acordar el criterio contable de ingresos y costos. No se agrega exportación CSV; Excel queda para una etapa posterior.
 - Las numeraciones incluyen el año como referencia y un identificador secuencial global derivado de la clave primaria; el contador no se reinicia al cambiar el año.
-- Los costos se congelan al finalizar o cancelar operativamente la obra, o al cerrarla comercialmente. Las observaciones técnicas siguen corregibles; Gerencia usa `POST /api/obras/{id}/reabrir/` con `motivo` para volver a `en-proceso`, solo si aún no hay factura/cierre comercial.
+- Los costos se congelan al finalizar o cancelar operativamente la obra, o al cerrarla comercialmente. Las observaciones técnicas siguen corregibles; Administrador general usa `POST /api/obras/{id}/reabrir/` con `motivo` para volver a `en-proceso`, solo si aún no hay factura/cierre comercial.
 - `POST /api/obras/{id}/transicionar/` requiere `motivo` al pasar a `suspendida` o `cancelada`; cancelar se bloquea ante cualquier factura emitida.
 - Indicadores dashboard adicionales en `metricas`: `cuentas_por_cobrar`, `recaudacion_periodo`, `proyeccion_ingresos_aprobados`, `presupuestos_por_vencer_7_dias`, `conversion_presupuestos`. En `distribuciones`: `obras_activas_por_tecnico`, `top_clientes_por_ventas` y `top_clientes_por_deuda`.
 - El botón `Actualizar Datos` debe solicitar el resumen incluyendo `actualizar=1` para saltarse los 15 segundos de caché. La UI aún conserva datos de demostración hasta la integración frontend/API prevista para el siguiente punto.
@@ -204,11 +204,11 @@ SEGURIDAD Y AUDITORÍA - AJUSTES (2026-11)
 - Access JWT dura 15 minutos; se mantienen refresh rotativo, blacklist, cookies HttpOnly y CSRF.
 - Cada refresh valida de nuevo que el usuario exista, esté activo, no esté eliminado y conserve `estado=activo`. Desactivar una cuenta revoca su capacidad de refrescar; activarla/restablecer su contraseña invalida los refresh anteriores.
 - Login aplica DRF `5/minuto` por IP y bloqueo temporal adicional por combinación IP/correo tras 5 fallos durante 15 minutos. No cambia permanentemente el estado de la cuenta, evitando que un tercero pueda bloquearla de forma indefinida.
-- Gerencia puede crear cuentas en `/api/usuarios/`; si la cuenta queda pendiente o sin contraseña, `POST /api/usuarios/{id}/activar/` recibe la contraseña inicial y activa la cuenta. Ese endpoint también permite restablecer contraseña. Las contraseñas pasan por los validadores Django y nunca se escriben en logs.
+- Administrador general puede crear cuentas en `/api/usuarios/`; si la cuenta queda pendiente o sin contraseña, `POST /api/usuarios/{id}/activar/` recibe la contraseña inicial y activa la cuenta. Ese endpoint también permite restablecer contraseña. Las contraseñas pasan por los validadores Django y nunca se escriben en logs.
 - `AuditoriaLog` registra IP remota, user-agent y snapshots JSON antes/después en altas, cambios, borrados lógicos y workflows financieros/operativos. El encabezado `X-Forwarded-For` solo se acepta si `FYAG_TRUST_PROXY_HEADERS=true` y el proxy está controlado por el despliegue.
 - El log es append-only en el modelo y manager: no permite save de registros existentes, delete ni QuerySet.update. `AuditoriaLog` no está registrado en Django Admin.
 - `backend/.env.example` documenta la configuración de secretos, DEBUG, hosts y orígenes. `backend/.env` está ignorado por Git; `DJANGO_SECRET_KEY` es obligatorio y no hay clave por defecto. DEBUG queda apagado por defecto; para demo HTTP local se habilita solo en el `.env` local.
 - Configuración regional: `LANGUAGE_CODE=es-cl`, `TIME_ZONE=America/Santiago`. Para probar desde móvil en la LAN, agrega la IP/host del servidor a `FYAG_ALLOWED_HOSTS` y el origen del frontend a `FYAG_FRONTEND_ORIGINS`.
 - La base configurada en `settings.py` es PostgreSQL. Esa sección permanece a cargo del responsable de dependencias/base de datos; esta revisión no la modifica.
 - Generar `DJANGO_SECRET_KEY` para el entorno real antes del despliegue. El `.env` local creado para desarrollo está ignorado por Git; no se debe copiar a otros ambientes. El límite temporal de intentos usa el cache local configurado por Django, adecuado para la demo de un proceso; con varios workers debe configurarse un cache compartido para que el bloqueo sea global.
-- Rutas nuevas: `POST /api/usuarios/{id}/activar/` (solo Gerencia), `GET /api/presupuestos/{id}/historial-versiones/` y las rutas de workflow listadas arriba.
+- Rutas nuevas: `POST /api/usuarios/{id}/activar/` (solo Administrador general), `GET /api/presupuestos/{id}/historial-versiones/` y las rutas de workflow listadas arriba.

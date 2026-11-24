@@ -3,10 +3,11 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from api.auth_views import CookieLoginView, CookieLogoutView, CookieRefreshView, CsrfTokenView, CurrentUserView
+from api.reportes import ReporteView, ReporteFiltrosView
 from api.views import (
     AuditoriaLogViewSet, CategoriaServicioViewSet, ClienteViewSet, ContratoViewSet,
     CostoMaterialViewSet, DashboardResumenView, FacturaViewSet, ObraViewSet, PagoViewSet,
-    PresupuestoViewSet, UsuarioViewSet,
+    MaterialViewSet, PresupuestoViewSet, UsuarioViewSet,
 )
 
 router = DefaultRouter()
@@ -16,6 +17,7 @@ router.register(r'contratos', ContratoViewSet)
 router.register(r'categorias-servicio', CategoriaServicioViewSet)
 router.register(r'presupuestos', PresupuestoViewSet)
 router.register(r'obras', ObraViewSet)
+router.register(r'materiales', MaterialViewSet)
 router.register(r'costos', CostoMaterialViewSet)
 router.register(r'facturas', FacturaViewSet)
 router.register(r'pagos', PagoViewSet)
@@ -30,4 +32,6 @@ urlpatterns = [
     path('api/auth/logout/', CookieLogoutView.as_view(), name='cookie-logout'),
     path('api/auth/me/', CurrentUserView.as_view(), name='current-user'),
     path('api/dashboard/resumen/', DashboardResumenView.as_view(), name='dashboard-resumen'),
+    path('api/reportes/filtros/', ReporteFiltrosView.as_view(), name='reportes-filtros'),
+    path('api/reportes/', ReporteView.as_view(), name='reportes'),
 ]

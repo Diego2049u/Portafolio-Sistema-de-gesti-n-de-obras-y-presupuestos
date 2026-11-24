@@ -3,13 +3,13 @@ from django.db.models.functions import TruncDate, TruncMonth
 from datetime import timedelta
 from django.utils import timezone
 
-from .models import CostoMaterial, Factura, NotaCredito, Obra, Pago, Presupuesto, ReversaPago
+from .models import CostoMaterial, Factura, MermaMaterial, NotaCredito, Obra, Pago, Presupuesto, ReversaPago
 
 
 ESTADOS_PENDIENTES_PRESUPUESTO = ('pendiente_gerencia', 'enviado')
 
 
-def construir_resumen_dashboard(*, desde, hasta, cliente_id=None, tecnico_id=None, estado_obra=None):
+def construir_resumen_dashboard(*, desde, hasta, cliente_id=None, tecnico_id=None, estado_obra=None, incluir_merma=False):
     """Calcula indicadores del MVP desde datos activos, aplicando filtros de obra."""
     obras_sin_estado = Obra.objects.select_related('clasificacion_servicio', 'presupuesto__cliente')
     if cliente_id:
@@ -169,7 +169,23 @@ def construir_resumen_dashboard(*, desde, hasta, cliente_id=None, tecnico_id=Non
         .order_by('-costo_total')[:10]
     )
 
+    merma = {}
+    if incluir_merma:
+        registros = MermaMaterial.objects.filter(fecha__range=(desde, hasta), asignacion__obra__in=obras)
+        cantidades = registros.values(
+            'asignacion__material_id', 'asignacion__material__nombre', 'asignacion__material__unidad',
+        ).annotate(cantidad=Sum('cantidad')).order_by('asignacion__material__nombre')
+        merma['merma_materiales'] = {
+            'obras_con_merma': registros.values('asignacion__obra_id').distinct().order_by().count(),
+            'por_material': [
+                {'id': fila['asignacion__material_id'], 'nombre': fila['asignacion__material__nombre'],
+                 'unidad': fila['asignacion__material__unidad'], 'cantidad': str(fila['cantidad'])}
+                for fila in cantidades
+            ],
+        }
+
     return {
+        **merma,
         'moneda': 'CLP',
         'periodo': {'desde': desde.isoformat(), 'hasta': hasta.isoformat()},
         'filtros': {

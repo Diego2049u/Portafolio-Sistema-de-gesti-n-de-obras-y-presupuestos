@@ -23,6 +23,7 @@ class FyagAPITestCase(APITestCase):
     """Fixtures comunes para probar permisos, workflows y trazabilidad vía API."""
 
     def setUp(self):
+        self.administrador = self.crear_usuario('administrador', 'ADMIN_GENERAL')
         self.gerencia = self.crear_usuario('gerencia', 'GERENCIA')
         self.finanzas = self.crear_usuario('finanzas', 'FINANZAS')
         self.supervisor = self.crear_usuario('supervisor', 'SUPERVISOR')
@@ -132,6 +133,8 @@ class RolePermissionTests(FyagAPITestCase):
 
     def test_tecnico_solo_recibe_sus_obras(self):
         propia = self.crear_obra(tecnico=self.tecnico)
+        propia.fecha_inicio = date(2026, 11, 16)
+        propia.save(update_fields=['fecha_inicio'])
         ajena = self.crear_obra(tecnico=self.otro_tecnico, presupuesto=self.crear_presupuesto(
             estado='aprobado', numero='PRE-TEST-002',
         ))
@@ -143,16 +146,47 @@ class RolePermissionTests(FyagAPITestCase):
         ids = {item['id'] for item in response.data['results']}
         self.assertIn(propia.pk, ids)
         self.assertNotIn(ajena.pk, ids)
+        self.assertNotIn('numero_presupuesto', response.data['results'][0])
         self.assertEqual(self.api.get(f'/api/obras/{ajena.pk}/').status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_dashboard_solo_gerencia_y_finanzas(self):
-        self.autenticar(self.finanzas)
-        self.assertEqual(self.api.get('/api/dashboard/resumen/').status_code, status.HTTP_200_OK)
-
         self.autenticar(self.supervisor)
-        self.assertEqual(self.api.get('/api/dashboard/resumen/').status_code, status.HTTP_403_FORBIDDEN)
+        detalle = self.api.get(f'/api/obras/{propia.pk}/')
+        self.assertEqual(detalle.status_code, status.HTTP_200_OK)
+        self.assertEqual(detalle.data['numero_presupuesto'], propia.presupuesto.numero_presupuesto)
+        self.assertEqual(detalle.data['fecha_inicio'], '2026-11-16')
 
-    def test_auditoria_solo_gerencia(self):
+    def test_dashboard_para_administrador_y_gerencia(self):
+        for usuario in (self.administrador, self.gerencia):
+            self.autenticar(usuario)
+            self.assertEqual(self.api.get('/api/dashboard/resumen/').status_code, status.HTTP_200_OK)
+
+        for usuario in (self.finanzas, self.supervisor, self.tecnico):
+            with self.subTest(rol=usuario.rol):
+                self.autenticar(usuario)
+                self.assertEqual(self.api.get('/api/dashboard/resumen/').status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_gerencia_consulta_modulos_sin_poder_modificar(self):
+        self.autenticar(self.gerencia)
+        for recurso in ('usuarios', 'clientes', 'contratos', 'categorias-servicio', 'presupuestos',
+                        'obras', 'materiales', 'costos', 'facturas', 'pagos', 'auditoria'):
+            with self.subTest(recurso=recurso):
+                self.assertEqual(self.api.get(f'/api/{recurso}/').status_code, 200)
+
+        cliente = f'/api/clientes/{self.cliente.pk}/'
+        for metodo, ruta in (
+            ('patch', cliente), ('delete', cliente), ('post', '/api/materiales/'),
+            ('post', '/api/usuarios/1/activar/'), ('post', '/api/presupuestos/1/aprobar-gerencia/'),
+            ('post', '/api/facturas/1/notas-credito/'), ('post', '/api/pagos/1/reversas/'),
+            ('post', '/api/obras/1/materiales/1/mermas/'),
+        ):
+            with self.subTest(metodo=metodo, ruta=ruta):
+                self.assertEqual(getattr(self.api, metodo)(ruta).status_code, 403)
+
+        self.autenticar(self.administrador)
+        response = self.api.patch(cliente, {'razon_social': 'Cliente actualizado'}, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+
+    def test_auditoria_para_administrador_y_gerencia(self):
         self.autenticar(self.finanzas)
         self.assertEqual(self.api.get('/api/auditoria/').status_code, status.HTTP_403_FORBIDDEN)
 
@@ -187,6 +221,24 @@ class DashboardTests(FyagAPITestCase):
 
 
 class PresupuestoWorkflowTests(FyagAPITestCase):
+    def test_guarda_borrador_sin_vencimiento_y_permite_quitarlo(self):
+        self.autenticar(self.finanzas)
+        creado = self.api.post('/api/presupuestos/', {
+            'cliente': self.cliente.pk,
+            'categoria_servicio': self.categoria.pk,
+            'contacto': 'Contacto de prueba',
+            'fecha_vencimiento': None,
+        }, format='json')
+        self.assertEqual(creado.status_code, status.HTTP_201_CREATED, creado.data)
+        self.assertIsNone(creado.data['fecha_vencimiento'])
+
+        ruta = f"/api/presupuestos/{creado.data['id']}/"
+        vencimiento = (timezone.localdate() + timedelta(days=30)).isoformat()
+        self.assertEqual(self.api.patch(ruta, {'fecha_vencimiento': vencimiento}, format='json').status_code, 200)
+        editado = self.api.patch(ruta, {'fecha_vencimiento': None}, format='json')
+        self.assertEqual(editado.status_code, 200)
+        self.assertIsNone(editado.data['fecha_vencimiento'])
+
     def test_no_se_puede_enviar_presupuesto_sin_partidas(self):
         presupuesto = self.crear_presupuesto()
         self.autenticar(self.finanzas)
@@ -208,7 +260,7 @@ class PresupuestoWorkflowTests(FyagAPITestCase):
             precio_unitario=Decimal('100000'),
         )
 
-        self.autenticar(self.gerencia)
+        self.autenticar(self.administrador)
         requerir = self.api.post(
             f'/api/presupuestos/{presupuesto.pk}/exigir-aprobacion-gerencia/', {}, format='json',
         )
@@ -219,7 +271,7 @@ class PresupuestoWorkflowTests(FyagAPITestCase):
         self.assertEqual(enviar.status_code, status.HTTP_200_OK)
         self.assertEqual(enviar.data['estado'], 'pendiente_gerencia')
 
-        self.autenticar(self.gerencia)
+        self.autenticar(self.administrador)
         aprobar_interno = self.api.post(
             f'/api/presupuestos/{presupuesto.pk}/aprobar-gerencia/',
             {'decision': 'aprobada'}, format='json',
@@ -247,6 +299,36 @@ class PresupuestoWorkflowTests(FyagAPITestCase):
 
 
 class ObraWorkflowTests(FyagAPITestCase):
+    def test_disponibilidad_del_cierre_comercial_considera_facturas_y_estado(self):
+        self.autenticar(self.finanzas)
+        obra = self.crear_obra(estado='finalizada', comercial='pendiente_facturacion')
+        ruta = f'/api/obras/{obra.pk}/'
+        self.assertFalse(self.api.get(ruta).data['puede_cerrar_comercial'])
+
+        self.crear_factura(obra, saldo=0)
+        pendiente = self.crear_factura(obra, numero='FAC-TEST-002')
+        self.assertFalse(self.api.get(ruta).data['puede_cerrar_comercial'])
+        pendiente.saldo_pendiente = 0
+        pendiente.save(update_fields=['saldo_pendiente'])
+        self.assertTrue(self.api.get(ruta).data['puede_cerrar_comercial'])
+
+        cierre = f'{ruta}cerrar-comercial/'
+        sin_motivo = self.api.post(cierre, {'motivo': '   '}, format='json')
+        self.assertEqual(sin_motivo.status_code, 400)
+        self.assertEqual(sin_motivo.data['error'], 'MOTIVO_CIERRE_REQUERIDO')
+        motivo = {'motivo': 'El cliente redujo el alcance.'}
+        self.autenticar(self.gerencia)
+        self.assertEqual(self.api.post(cierre, motivo, format='json').status_code, 403)
+        self.autenticar(self.administrador)
+        self.assertEqual(self.api.post(cierre, motivo, format='json').status_code, 403)
+        self.autenticar(self.finanzas)
+        self.assertEqual(self.api.post(cierre, motivo, format='json').status_code, 200)
+        evento = AuditoriaLog.objects.get(accion='cierre_comercial_obra', entidad_id=str(obra.pk))
+        self.assertEqual(evento.usuario, self.finanzas)
+        self.assertEqual(evento.valores_nuevos['motivo'], motivo['motivo'])
+        self.assertEqual(Decimal(evento.valores_nuevos['monto_sin_facturar']), Decimal('19000'))
+        self.assertFalse(self.api.get(ruta).data['puede_cerrar_comercial'])
+
     def test_no_se_finaliza_obra_sin_tecnico(self):
         obra = self.crear_obra()
         self.autenticar(self.supervisor)
@@ -299,6 +381,19 @@ class ObraWorkflowTests(FyagAPITestCase):
 
 
 class FacturacionWorkflowTests(FyagAPITestCase):
+    def test_nota_de_credito_reduce_facturacion_neta_y_exige_cierre_justificado(self):
+        obra = self.crear_obra(estado='finalizada', comercial='pendiente_cobro')
+        factura = self.crear_factura(obra, total=119000, saldo=19000)
+        self.autenticar(self.finanzas)
+        nota = self.api.post(f'/api/facturas/{factura.pk}/notas-credito/', {
+            'numero': 'NC-01', 'monto': '19000', 'motivo': 'Ajuste de alcance',
+        }, format='json')
+        self.assertEqual(nota.status_code, 200, nota.data)
+        obra.refresh_from_db()
+        self.assertEqual(obra.estado_comercial, 'pendiente_facturacion')
+        cierre = self.api.post(f'/api/obras/{obra.pk}/cerrar-comercial/', {}, format='json')
+        self.assertEqual(cierre.data['error'], 'MOTIVO_CIERRE_REQUERIDO')
+
     def test_facturas_acumuladas_no_superan_el_presupuesto(self):
         presupuesto = self.crear_presupuesto(estado='aprobado', monto=90000)
         obra = self.crear_obra(presupuesto=presupuesto, tecnico=self.tecnico, estado='finalizada', comercial='pendiente_facturacion')
@@ -335,7 +430,21 @@ class FacturacionWorkflowTests(FyagAPITestCase):
 
     def test_pago_total_cierra_la_obra_y_crea_evento_auditable(self):
         obra = self.crear_obra(tecnico=self.tecnico, estado='finalizada', comercial='pendiente_cobro')
-        factura = self.crear_factura(obra, total=50000)
+        primera = self.crear_factura(obra, total=69000)
+        self.autenticar(self.finanzas)
+        parcial = self.api.post('/api/pagos/', {
+            'factura': primera.pk, 'monto': '69000',
+            'fecha_pago': date.today().isoformat(), 'metodo_pago': 'Transferencia',
+        }, format='json')
+        self.assertEqual(parcial.status_code, status.HTTP_201_CREATED)
+        obra.refresh_from_db()
+        self.assertEqual(obra.estado_comercial, 'pendiente_facturacion')
+        nueva = self.api.post('/api/facturas/', {
+            'obra': obra.pk, 'fecha_vencimiento': (date.today() + timedelta(days=30)).isoformat(),
+            'monto_neto': '50000', 'monto_total': '50000',
+        }, format='json')
+        self.assertEqual(nueva.status_code, status.HTTP_201_CREATED, nueva.data)
+        factura = Factura.objects.get(pk=nueva.data['id'])
         self.autenticar(self.finanzas)
         self.api.defaults['REMOTE_ADDR'] = '192.0.2.10'
         self.api.defaults['HTTP_USER_AGENT'] = 'FYAG API test'

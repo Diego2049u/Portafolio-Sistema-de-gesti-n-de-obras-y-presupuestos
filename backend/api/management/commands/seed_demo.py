@@ -33,11 +33,15 @@ from api.services import (
 CLAVE_POR_DEFECTO = 'Fyag2026!'
 
 CUENTAS = (
+    ('admin@fyag.cl', 'Andrea', 'Vargas', None, 'Administrador general', 'ADMIN_GENERAL'),
     ('gerencia@fyag.cl', 'Rocío', 'Morales', '11.111.111-1', 'Gerencia General', 'GERENCIA'),
     ('finanzas@fyag.cl', 'Felipe', 'Rojas', '12.222.222-2', 'Analista de Finanzas', 'FINANZAS'),
     ('supervisor@fyag.cl', 'Sergio', 'Cáceres', '13.333.333-3', 'Supervisor de Obras', 'SUPERVISOR'),
     ('tecnico@fyag.cl', 'Carlos', 'Araya', '16.892.441-K', 'Técnico de Climatización', 'TECNICO'),
     ('tecnico2@fyag.cl', 'Eduardo', 'Vera', '15.234.890-2', 'Técnico de Mantención', 'TECNICO'),
+    ('tecnico3@fyag.cl', 'Camila', 'Fuentes', None, 'Técnica de Refrigeración', 'TECNICO'),
+    ('tecnico4@fyag.cl', 'Matías', 'Silva', None, 'Técnico Eléctrico', 'TECNICO'),
+    ('tecnico5@fyag.cl', 'Valentina', 'Muñoz', None, 'Técnica de Mantención', 'TECNICO'),
 )
 
 CLIENTES = (

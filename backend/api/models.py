@@ -22,7 +22,7 @@ class ActiveUserManager(UserManager.from_queryset(SoftDeleteQuerySet)):
         return super().get_queryset().filter(deleted_at__isnull=True)
 
     def create_superuser(self, username, email=None, password=None, **extra_fields):
-        extra_fields.setdefault('rol', 'GERENCIA')
+        extra_fields.setdefault('rol', 'ADMIN_GENERAL')
         extra_fields.setdefault('estado', 'activo')
         extra_fields.setdefault('is_active', True)
         return super().create_superuser(username, email, password, **extra_fields)
@@ -73,7 +73,8 @@ class SoftDeleteModel(models.Model):
 
 class Usuario(AbstractUser):
     ROLES = (
-        ('GERENCIA', 'Gerencia / Admin General'),
+        ('ADMIN_GENERAL', 'Administrador general'),
+        ('GERENCIA', 'Gerencia'),
         ('FINANZAS', 'Finanzas'),
         ('SUPERVISOR', 'Supervisor de Obras'),
         ('TECNICO', 'Técnico'),
@@ -285,6 +286,46 @@ class Obra(SoftDeleteModel):
 
     def __str__(self):
         return f"{self.codigo_obra} - {self.nombre_obra}"
+
+
+class Material(models.Model):
+    nombre = models.CharField(max_length=120, unique=True)
+    unidad = models.CharField(max_length=20)
+    servicios = models.JSONField(default=list, blank=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['nombre', 'pk']
+
+    def __str__(self):
+        return self.nombre
+
+
+class ObraMaterial(models.Model):
+    obra = models.ForeignKey(Obra, on_delete=models.PROTECT, related_name='materiales')
+    material = models.ForeignKey(Material, on_delete=models.PROTECT)
+    cantidad_planificada = models.DecimalField(max_digits=12, decimal_places=3)
+
+    class Meta:
+        ordering = ['pk']
+        constraints = [
+            models.UniqueConstraint(fields=['obra', 'material'], name='obra_material_unico'),
+            models.CheckConstraint(check=models.Q(cantidad_planificada__gt=0), name='obra_material_cantidad_positiva'),
+        ]
+
+
+class MermaMaterial(models.Model):
+    asignacion = models.ForeignKey(ObraMaterial, on_delete=models.PROTECT, related_name='mermas')
+    cantidad = models.DecimalField(max_digits=12, decimal_places=3)
+    motivo = models.CharField(max_length=255)
+    fecha = models.DateField(auto_now_add=True, db_index=True)
+    registrado_por = models.ForeignKey(Usuario, on_delete=models.PROTECT)
+
+    class Meta:
+        ordering = ['-fecha', '-pk']
+        constraints = [
+            models.CheckConstraint(check=models.Q(cantidad__gt=0), name='merma_material_cantidad_positiva'),
+        ]
 
 
 class CostoMaterial(SoftDeleteModel):

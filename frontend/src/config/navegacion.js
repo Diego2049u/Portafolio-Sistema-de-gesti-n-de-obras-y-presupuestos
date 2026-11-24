@@ -1,17 +1,18 @@
 // src/config/navegacion.js
 
 export const ROLES = {
+  ADMIN_GENERAL: 'ADMIN_GENERAL',
   GERENCIA: 'GERENCIA',
   FINANZAS: 'FINANZAS',
   SUPERVISOR: 'SUPERVISOR',
   TECNICO: 'TECNICO',
   // Alias de compatibilidad para evitar romper código previo que use ROLES.ADMIN
-  ADMIN: 'GERENCIA'
+  ADMIN: 'ADMIN_GENERAL'
 };
 
 const ROLE_ALIASES = {
-  ADMIN: ROLES.GERENCIA,
-  ADMINISTRADOR: ROLES.GERENCIA,
+  ADMIN: ROLES.ADMIN_GENERAL,
+  ADMINISTRADOR: ROLES.ADMIN_GENERAL,
   GERENTE: ROLES.GERENCIA,
 };
 
@@ -32,7 +33,8 @@ export function getDefaultPath(role) {
 export function getRoleLabel(role) {
   const normalizedRole = normalizeRole(role);
   return {
-    [ROLES.GERENCIA]: 'Gerencia / Admin General',
+    [ROLES.ADMIN_GENERAL]: 'Administrador general',
+    [ROLES.GERENCIA]: 'Gerencia',
     [ROLES.FINANZAS]: 'Finanzas',
     [ROLES.SUPERVISOR]: 'Supervisor de Obras',
     [ROLES.TECNICO]: 'Técnico',
@@ -47,14 +49,28 @@ export const NAV_ITEMS = [
     label: 'Dashboard Gerencial',
     icon: 'monitoring',
     path: '/dashboard',
-    roles: [ROLES.GERENCIA, ROLES.FINANZAS]
+    roles: [ROLES.ADMIN_GENERAL, ROLES.GERENCIA]
   },
   {
     id: 'obras',
     label: 'Obras y Proyectos',
     icon: 'foundation',
     path: '/obras',
-    roles: [ROLES.GERENCIA, ROLES.FINANZAS, ROLES.SUPERVISOR, ROLES.TECNICO]
+    roles: [ROLES.ADMIN_GENERAL, ROLES.GERENCIA, ROLES.FINANZAS, ROLES.SUPERVISOR, ROLES.TECNICO]
+  },
+  {
+    id: 'reportes',
+    label: 'Reportes',
+    icon: 'summarize',
+    path: '/reportes',
+    roles: [ROLES.ADMIN_GENERAL, ROLES.GERENCIA, ROLES.FINANZAS]
+  },
+  {
+    id: 'recursos',
+    label: 'Recursos',
+    icon: 'category',
+    path: '/recursos',
+    roles: [ROLES.ADMIN_GENERAL, ROLES.GERENCIA, ROLES.SUPERVISOR]
   },
   {
     id: 'mi-horario',
@@ -68,42 +84,42 @@ export const NAV_ITEMS = [
     label: 'Presupuestos y Costos',
     icon: 'request_quote',
     path: '/presupuestos',
-    roles: [ROLES.GERENCIA, ROLES.FINANZAS]
+    roles: [ROLES.ADMIN_GENERAL, ROLES.GERENCIA, ROLES.FINANZAS]
   },
   {
     id: 'costos',
     label: 'Costos y Materiales',
     icon: 'inventory_2',
     path: '/costos',
-    roles: [ROLES.GERENCIA, ROLES.FINANZAS, ROLES.SUPERVISOR]
+    roles: [ROLES.ADMIN_GENERAL, ROLES.GERENCIA, ROLES.FINANZAS, ROLES.SUPERVISOR]
   },
   {
     id: 'facturacion',
     label: 'Facturación y Cobranza',
     icon: 'receipt_long',
     path: '/facturacion',
-    roles: [ROLES.GERENCIA, ROLES.FINANZAS]
+    roles: [ROLES.ADMIN_GENERAL, ROLES.GERENCIA, ROLES.FINANZAS]
   },
   {
     id: 'clientes',
     label: 'Clientes y Contratos',
     icon: 'group',
     path: '/clientes',
-    roles: [ROLES.GERENCIA, ROLES.FINANZAS, ROLES.SUPERVISOR]
+    roles: [ROLES.ADMIN_GENERAL, ROLES.GERENCIA, ROLES.FINANZAS, ROLES.SUPERVISOR]
   },
   {
     id: 'tecnicos',
     label: 'Disponibilidad Técnicos',
     icon: 'engineering',
     path: '/tecnicos',
-    roles: [ROLES.GERENCIA, ROLES.SUPERVISOR]
+    roles: [ROLES.ADMIN_GENERAL, ROLES.GERENCIA, ROLES.SUPERVISOR]
   },
   {
     id: 'auditoria',
     label: 'Auditoría del sistema',
     icon: 'history',
     path: '/auditoria',
-    roles: [ROLES.GERENCIA]
+    roles: [ROLES.ADMIN_GENERAL, ROLES.GERENCIA]
   }
 ];
 

@@ -40,7 +40,7 @@ export default function Tecnicos() {
           <p className="mt-3 text-body-sm text-secondary">{tecnico.horas_ocupadas} de {tecnico.horas_laborales} horas laborales reservadas</p>
           <p className="mt-2 text-body-sm text-secondary">{tecnico.obras.length ? tecnico.obras.map((o) => o.nombre).join(', ') : 'Sin obras asignadas en este período'}</p>
           {!!tecnico.sin_planificar.length && <p className="mt-2 text-body-sm text-tertiary">Complete las fechas de las obras sin planificación.</p>}
-          <Link to={`/tecnicos/${tecnico.id}`} className="mt-4 inline-flex items-center gap-1 font-semibold text-primary hover:underline">Ver perfil <span aria-hidden="true" className="material-symbols-outlined text-base">arrow_forward</span></Link>
+          <Link to={`/tecnicos/${tecnico.id}`} className="link-action mt-4">Ver perfil <span aria-hidden="true" className="material-symbols-outlined text-base">arrow_forward</span></Link>
         </article>)}
       </div>{!estado.rows.length && <p className="text-secondary">No hay técnicos activos registrados.</p>}</section>
     </>}

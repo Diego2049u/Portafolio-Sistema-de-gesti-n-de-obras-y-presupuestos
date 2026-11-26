@@ -1,5 +1,5 @@
 import uuid
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import transaction
 from django.utils import timezone
@@ -7,10 +7,10 @@ from rest_framework import serializers
 
 from .models import (
     AuditoriaLog, CategoriaServicio, Cliente, Contrato, CostoMaterial,
-    Factura, ItemPresupuesto, Material, MermaMaterial, Obra,
-    ObraMaterial, Pago, Presupuesto, Usuario,
+    Factura, GastoGeneral, ItemPresupuesto, Material, MermaMaterial, MovimientoMaterial, NotaCredito, Obra,
+    ObraMaterial, Pago, Presupuesto, Proveedor, Usuario,
 )
-from .services import actualizar_totales_presupuesto, guardar_version_presupuesto, total_facturado_neto
+from .services import actualizar_totales_presupuesto, guardar_version_presupuesto, iva_estandar, total_facturado_neto
 from .disponibilidad import CHILE, validar_asignacion
 
 
@@ -106,22 +106,18 @@ class CategoriaServicioSerializer(serializers.ModelSerializer):
 
 class ItemPresupuestoSerializer(serializers.ModelSerializer):
     subtotal = serializers.DecimalField(max_digits=14, decimal_places=0, read_only=True)
+    precio_unitario = serializers.DecimalField(max_digits=12, decimal_places=0, min_value=0, required=False)
+    costo_unitario = serializers.DecimalField(max_digits=12, decimal_places=0, min_value=0, required=False, allow_null=True)
 
     class Meta:
         model = ItemPresupuesto
-        fields = ['id', 'descripcion', 'cantidad', 'unidad', 'precio_unitario', 'subtotal']
+        fields = ['id', 'descripcion', 'cantidad', 'unidad', 'precio_unitario', 'costo_unitario', 'subtotal']
         read_only_fields = ['id', 'subtotal']
 
     def validate_cantidad(self, value):
         if value <= 0:
             raise serializers.ValidationError('La cantidad debe ser mayor que cero.')
         return value
-
-    def validate_precio_unitario(self, value):
-        if value < 0:
-            raise serializers.ValidationError('El precio unitario no puede ser negativo.')
-        return value
-
 
 class PresupuestoSerializer(serializers.ModelSerializer):
     items = ItemPresupuestoSerializer(many=True, required=False)
@@ -139,6 +135,29 @@ class PresupuestoSerializer(serializers.ModelSerializer):
     class Meta:
         model = Presupuesto
         fields = '__all__'
+        read_only_fields = ['costo_base', 'reserva_imprevistos', 'ganancia_prevista']
+
+    @staticmethod
+    def preparar_partidas(presupuesto, items, *, ya_valorizado=False):
+        margen = presupuesto.margen_objetivo
+        contingencia = presupuesto.contingencia_porcentaje
+        if ya_valorizado and margen is None and contingencia is None:
+            raise serializers.ValidationError({'margen_objetivo': 'Conserve los porcentajes del presupuesto.'})
+        if margen is not None or contingencia is not None:
+            if margen is None or not 0 <= margen < 100:
+                raise serializers.ValidationError({'margen_objetivo': 'Indique un margen desde 0 hasta 99,99%.'})
+            if contingencia is None or not 0 <= contingencia <= 100:
+                raise serializers.ValidationError({'contingencia_porcentaje': 'Indique una reserva desde 0 hasta 100%.'})
+            if items is None:
+                if ya_valorizado:
+                    return
+                raise serializers.ValidationError({'items': 'Ingrese las partidas con sus costos internos.'})
+            if not items or any(item.get('costo_unitario') is None for item in items):
+                raise serializers.ValidationError({'items': 'Ingrese el costo interno de cada partida.'})
+            for item in items:
+                item['precio_unitario'] = 0
+        elif items is not None and any('precio_unitario' not in item or item.get('costo_unitario') is not None for item in items):
+            raise serializers.ValidationError({'items': 'Ingrese el precio de venta o configure margen y contingencia para usar costos internos.'})
 
     @transaction.atomic
     def create(self, validated_data):
@@ -150,7 +169,9 @@ class PresupuestoSerializer(serializers.ModelSerializer):
         if contrato and contrato.cliente_id != cliente.pk:
             raise serializers.ValidationError({'contrato': 'El contrato debe pertenecer al mismo cliente del presupuesto.'})
         validated_data['numero_presupuesto'] = f'TMP-{uuid.uuid4().hex[:20]}'
-        presupuesto = Presupuesto.objects.create(**validated_data)
+        presupuesto = Presupuesto(**validated_data)
+        self.preparar_partidas(presupuesto, items)
+        presupuesto.save()
         presupuesto.numero_presupuesto = f'PRE-{timezone.localdate().year}-{presupuesto.pk:06d}'
         presupuesto.save(update_fields=['numero_presupuesto', 'updated_at'])
         usuario = getattr(self.context.get('request'), 'user', None)
@@ -162,11 +183,14 @@ class PresupuestoSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def update(self, instance, validated_data):
+        instance = Presupuesto.objects.select_for_update().get(pk=instance.pk)
         items = validated_data.pop('items', None)
+        ya_valorizado = instance.margen_objetivo is not None
         if instance.estado != 'borrador':
             raise serializers.ValidationError({'estado': 'Solo se pueden editar presupuestos en borrador.'})
         for campo, valor in validated_data.items():
             setattr(instance, campo, valor)
+        self.preparar_partidas(instance, items, ya_valorizado=ya_valorizado)
         if not instance.cliente.habilitar_emision:
             raise serializers.ValidationError({'cliente': 'El cliente tiene deshabilitada la emisión de presupuestos y documentos de cobro.'})
         if instance.contrato_id and instance.contrato.cliente_id != instance.cliente_id:
@@ -179,6 +203,7 @@ class PresupuestoSerializer(serializers.ModelSerializer):
                 item.soft_delete()
             for item_data in items:
                 ItemPresupuesto.objects.create(presupuesto=instance, created_by=usuario, updated_by=usuario, **item_data)
+        if items is not None or ya_valorizado:
             actualizar_totales_presupuesto(instance)
         usuario = getattr(self.context.get('request'), 'user', None)
         guardar_version_presupuesto(instance, usuario)
@@ -236,13 +261,28 @@ class MermaMaterialSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'fecha']
 
 
+class MovimientoMaterialSerializer(serializers.ModelSerializer):
+    cantidad = serializers.DecimalField(max_digits=12, decimal_places=3, min_value=Decimal('0.001'))
+
+    class Meta:
+        model = MovimientoMaterial
+        fields = ['id', 'tipo', 'cantidad', 'motivo', 'referencia', 'fecha', 'registrado_por']
+        read_only_fields = ['fecha', 'registrado_por']
+
+
 class ObraMaterialSerializer(serializers.ModelSerializer):
     material = MaterialSerializer(read_only=True)
     mermas = MermaMaterialSerializer(many=True, read_only=True)
+    movimientos = MovimientoMaterialSerializer(many=True, read_only=True)
+    saldo = serializers.SerializerMethodField()
+
+    def get_saldo(self, instance):
+        saldo = instance.saldo_registrado()
+        return str(saldo) if saldo is not None else None
 
     class Meta:
         model = ObraMaterial
-        fields = ['id', 'material', 'cantidad_planificada', 'mermas']
+        fields = ['id', 'material', 'cantidad_planificada', 'mermas', 'movimientos', 'saldo']
 
 
 class ObraSerializer(serializers.ModelSerializer):
@@ -343,9 +383,32 @@ class ObraSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class ProveedorSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Proveedor
+        fields = ['id', 'rut', 'razon_social', 'correo', 'telefono', 'activo']
+
+    def validate_rut(self, value):
+        rut = value.replace('.', '').replace(' ', '').upper()
+        cuerpo, separador, digito = rut.partition('-')
+        if not separador or not cuerpo.isascii() or not cuerpo.isdigit() or len(cuerpo) > 8 or not cuerpo.lstrip('0'):
+            raise serializers.ValidationError('Ingrese el RUT con su dígito verificador.')
+        cuerpo = cuerpo.lstrip('0')
+        resto = 11 - sum(int(numero) * (2 + indice % 6) for indice, numero in enumerate(reversed(cuerpo))) % 11
+        esperado = '0' if resto == 11 else 'K' if resto == 10 else str(resto)
+        if digito != esperado:
+            raise serializers.ValidationError('El dígito verificador del RUT no coincide.')
+        normalizado = f'{cuerpo}-{digito}'
+        if Proveedor.all_objects.filter(rut=normalizado).exclude(pk=getattr(self.instance, 'pk', None)).exists():
+            raise serializers.ValidationError('Ya existe un proveedor con ese RUT.')
+        return normalizado
+
+
 class CostoMaterialSerializer(serializers.ModelSerializer):
+    monto = serializers.DecimalField(max_digits=12, decimal_places=0, required=False)
     obra_codigo = serializers.CharField(source='obra.codigo_obra', read_only=True)
     fecha = serializers.DateField(read_only=True)
+    proveedor_nombre = serializers.CharField(source='proveedor.razon_social', read_only=True, default=None)
 
     class Meta:
         model = CostoMaterial
@@ -363,14 +426,51 @@ class CostoMaterialSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('El monto debe ser mayor que cero.')
         return value
 
+    def validate_proveedor(self, proveedor):
+        if proveedor and not proveedor.activo and proveedor.pk != getattr(self.instance, 'proveedor_id', None):
+            raise serializers.ValidationError('Seleccione un proveedor activo.')
+        return proveedor
+
     def validate(self, attrs):
         obra = attrs.get('obra', getattr(self.instance, 'obra', None))
         if obra and (obra.estado_operativo in {'finalizada', 'cancelada'} or obra.estado_comercial == 'cerrada'):
             raise serializers.ValidationError({'obra': 'No se pueden registrar ni modificar costos de una obra finalizada, cancelada o cerrada comercialmente.'})
+        cantidad = attrs.get('cantidad_real', getattr(self.instance, 'cantidad_real', None))
+        tarifa = attrs.get('costo_unitario_real', getattr(self.instance, 'costo_unitario_real', None))
+        unidad = attrs.get('unidad_real', getattr(self.instance, 'unidad_real', ''))
+        categoria = attrs.get('categoria', getattr(self.instance, 'categoria', None))
+        despacho = attrs.get('despacho', getattr(self.instance, 'despacho', None))
+        if despacho:
+            if categoria != 'MATERIALES' or despacho.tipo != MovimientoMaterial.Tipo.ENTRADA or despacho.asignacion.obra_id != obra.pk:
+                raise serializers.ValidationError({'despacho': 'Seleccione una entrada de materiales de esta obra.'})
+            cantidad = attrs['cantidad_real'] = despacho.cantidad
+            unidad = attrs['unidad_real'] = despacho.asignacion.material.unidad
+        if cantidad is not None or tarifa is not None or unidad:
+            if categoria not in {'MANO_DE_OBRA', 'MATERIALES'}:
+                raise serializers.ValidationError({'categoria': 'El desglose corresponde a mano de obra o materiales.'})
+            if cantidad is None or tarifa is None or cantidad <= 0 or tarifa <= 0 or not unidad:
+                raise serializers.ValidationError({'cantidad_real': 'Indique cantidad, unidad y costo unitario positivos.'})
+            if categoria == 'MANO_DE_OBRA' and unidad != 'h':
+                raise serializers.ValidationError({'unidad_real': 'Registre las horas profesionales en h.'})
+            monto = (cantidad * tarifa).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+            if not 0 < monto < 10**12:
+                raise serializers.ValidationError({'monto': 'El costo calculado debe estar entre 1 y 999999999999 CLP.'})
+            attrs['monto'] = monto
+        elif self.instance is None and 'monto' not in attrs:
+            raise serializers.ValidationError({'monto': 'Indique el monto del costo.'})
         return attrs
 
 
+class GastoGeneralSerializer(serializers.ModelSerializer):
+    monto = serializers.DecimalField(max_digits=12, decimal_places=0, min_value=Decimal('1'))
+
+    class Meta:
+        model = GastoGeneral
+        fields = ['id', 'fecha', 'descripcion', 'monto']
+
+
 class FacturaSerializer(serializers.ModelSerializer):
+    aplica_iva = serializers.BooleanField(required=False, write_only=True)
     saldo_pendiente = serializers.DecimalField(max_digits=12, decimal_places=0, read_only=True)
     estado_pago = serializers.CharField(read_only=True)
     fecha_emision = serializers.DateField(read_only=True)
@@ -386,7 +486,7 @@ class FacturaSerializer(serializers.ModelSerializer):
         fields = super().get_fields()
         fields['numero_factura'].read_only = True
         if self.instance:
-            for name in ('obra', 'monto_neto', 'monto_total'):
+            for name in ('obra', 'monto_neto', 'monto_total', 'aplica_iva'):
                 fields[name].read_only = True
         return fields
 
@@ -398,10 +498,14 @@ class FacturaSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'obra': 'Solo se puede facturar una obra finalizada.'})
         if obra and obra.estado_comercial == 'cerrada':
             raise serializers.ValidationError({'obra': 'No se puede emitir una nueva factura después del cierre comercial.'})
-        if neto is not None and neto < 0:
-            raise serializers.ValidationError({'monto_neto': 'El monto neto no puede ser negativo.'})
-        if total is not None and (total <= 0 or (neto is not None and total < neto)):
-            raise serializers.ValidationError({'monto_total': 'El total debe ser positivo y no menor que el monto neto.'})
+        if neto is not None and neto <= 0:
+            raise serializers.ValidationError({'monto_neto': 'El monto neto debe ser mayor que cero.'})
+        if neto is not None:
+            con_iva = neto + iva_estandar(neto)
+            aplica_iva = attrs.get('aplica_iva')
+            permitidos = {con_iva} if aplica_iva is True else {neto} if aplica_iva is False else {neto, con_iva}
+            if total not in permitidos:
+                raise serializers.ValidationError({'monto_total': 'El total no coincide con el neto y el IVA aplicable.'})
         if obra:
             cliente = obra.presupuesto.cliente
             if not cliente.habilitar_emision:
@@ -423,6 +527,7 @@ class FacturaSerializer(serializers.ModelSerializer):
             validated_data['obra'] = obra
             # Revalidate under the work-row lock to prevent concurrent overbilling.
             self.validate(validated_data)
+            validated_data.pop('aplica_iva', None)
             validated_data['numero_factura'] = f'TMP-{uuid.uuid4().hex[:20]}'
             return self._create_factura(validated_data)
 
@@ -462,6 +567,11 @@ class NotaCreditoSerializer(serializers.Serializer):
     numero = serializers.CharField(max_length=40)
     monto = serializers.DecimalField(max_digits=12, decimal_places=0, min_value=1)
     motivo = serializers.CharField()
+
+    def validate_numero(self, value):
+        if NotaCredito.objects.filter(numero=value).exists():
+            raise serializers.ValidationError('Ya existe una nota de crédito con ese número.')
+        return value
 
 
 class ReversaPagoSerializer(serializers.Serializer):

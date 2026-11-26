@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard';
 import Reportes from './pages/Reportes';
 import ObrasProyectos from './pages/ObrasProyectos';
 import Recursos from './pages/Recursos';
+import Proveedores from './pages/Proveedores';
 import PresupuestosCostos from './pages/PresupuestosCostos';
 import CostosMateriales from './pages/CostosMateriales';
 import FacturacionCobranza from './pages/FacturacionCobranza';
@@ -22,6 +23,7 @@ const PAGE_BY_ID = {
   reportes: Reportes,
   obras: ObrasProyectos,
   recursos: Recursos,
+  proveedores: Proveedores,
   presupuestos: PresupuestosCostos,
   costos: CostosMateriales,
   facturacion: FacturacionCobranza,

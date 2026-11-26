@@ -10,7 +10,7 @@ export default function TecnicoDisponibilidad({ user, userRole }) {
   const tecnico = data?.tecnico;
   const nombre = tecnico?.nombre || (personal ? user.name : 'Agenda del técnico');
   return <div className="space-y-6">
-    <Link to={personal ? '/obras' : '/tecnicos'} className="inline-flex items-center gap-2 text-label-md font-semibold text-primary hover:underline">
+    <Link to={personal ? '/obras' : '/tecnicos'} className="link-action">
       <span aria-hidden="true" className="material-symbols-outlined text-base">arrow_back</span>
       {personal ? 'Volver a Obras y Proyectos' : 'Volver al equipo técnico'}
     </Link>

@@ -1,10 +1,10 @@
-from decimal import Decimal
+from decimal import Decimal, ROUND_CEILING
 import json
 
 from django.conf import settings
 from django.core.serializers.json import DjangoJSONEncoder
-from django.db import transaction
-from django.db.models import Sum
+from django.db import IntegrityError, transaction
+from django.db.models import Q, Sum
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
@@ -18,6 +18,10 @@ TRANSICIONES_OBRA = {
     'finalizada': set(),
     'cancelada': set(),
 }
+
+
+def iva_estandar(neto):
+    return (neto * Decimal('0.19')).quantize(Decimal('1'))
 
 
 def registrar_evento(*, usuario, modulo, accion, resultado, detalle, entidad='', entidad_id='', metadata=None, valores_anteriores=None, valores_nuevos=None, request=None):
@@ -54,17 +58,38 @@ def guardar_con_actor(instance, usuario, campos):
 
 
 def actualizar_totales_presupuesto(presupuesto):
-    partidas = presupuesto.items.filter(deleted_at__isnull=True)
-    neto = sum((item.subtotal for item in partidas), Decimal('0'))
-    iva = (neto * Decimal('0.19')).quantize(Decimal('1'))
+    partidas = list(presupuesto.items.filter(deleted_at__isnull=True))
+    campos_internos = []
+    if presupuesto.margen_objetivo is not None:
+        costo = sum((item.cantidad * item.costo_unitario for item in partidas), Decimal('0'))
+        factor_reserva = presupuesto.contingencia_porcentaje / 100
+        reserva = (costo * factor_reserva).to_integral_value(rounding=ROUND_CEILING)
+        # Distribuir la reserva proporcionalmente a los costos de las partidas.
+        # Redondear el precio por unidad hacia arriba conserva los subtotales en CLP.
+        denominador = int(costo or 1) * (10000 - int(presupuesto.margen_objetivo * 100))
+        for item in partidas:
+            numerador = int(item.costo_unitario) * int(costo + reserva) * 10000
+            item.precio_unitario = Decimal((numerador + denominador - 1) // denominador)
+        neto = sum((item.subtotal for item in partidas), Decimal('0'))
+        presupuesto.costo_base = costo
+        presupuesto.reserva_imprevistos = reserva
+        presupuesto.ganancia_prevista = neto - costo - reserva
+        campos_internos = ['costo_base', 'reserva_imprevistos', 'ganancia_prevista']
+    else:
+        neto = sum((item.subtotal for item in partidas), Decimal('0'))
+    iva = iva_estandar(neto)
+    if neto + iva >= 10**12:
+        raise ValidationError({'items': 'El total supera el máximo admitido en pesos.'})
+    if campos_internos:
+        presupuesto.items.bulk_update(partidas, ['precio_unitario'])
     presupuesto.monto_neto = neto
     presupuesto.iva = iva
     presupuesto.monto_total = neto + iva
-    presupuesto.save(update_fields=['monto_neto', 'iva', 'monto_total', 'updated_at'])
+    presupuesto.save(update_fields=['monto_neto', 'iva', 'monto_total', 'updated_at', *campos_internos])
 
 
 def snapshot_presupuesto(presupuesto):
-    return {
+    snapshot = {
         'numero_presupuesto': presupuesto.numero_presupuesto,
         'cliente_id': presupuesto.cliente_id,
         'contrato_id': presupuesto.contrato_id,
@@ -75,10 +100,18 @@ def snapshot_presupuesto(presupuesto):
         'iva': str(presupuesto.iva),
         'monto_total': str(presupuesto.monto_total),
         'items': [
-            {'descripcion': item.descripcion, 'cantidad': item.cantidad, 'unidad': item.unidad, 'precio_unitario': str(item.precio_unitario)}
+            {
+                'descripcion': item.descripcion, 'cantidad': item.cantidad, 'unidad': item.unidad,
+                'precio_unitario': str(item.precio_unitario),
+                **({'costo_unitario': str(item.costo_unitario)} if item.costo_unitario is not None else {}),
+            }
             for item in presupuesto.items.filter(deleted_at__isnull=True).order_by('id')
         ],
     }
+    if presupuesto.margen_objetivo is not None:
+        for campo in ('costo_base', 'contingencia_porcentaje', 'reserva_imprevistos', 'margen_objetivo', 'ganancia_prevista'):
+            snapshot[campo] = str(getattr(presupuesto, campo))
+    return snapshot
 
 
 def guardar_version_presupuesto(presupuesto, usuario):
@@ -116,6 +149,7 @@ def exigir_aprobacion_gerencia(presupuesto, usuario):
 
 @transaction.atomic
 def enviar_presupuesto(presupuesto, usuario):
+    presupuesto = Presupuesto.objects.select_for_update().get(pk=presupuesto.pk)
     if presupuesto.estado != 'borrador':
         raise ValidationError({'error': 'TRANSICION_NO_PERMITIDA', 'detalle': 'Solo se pueden enviar presupuestos en borrador.'})
     if not presupuesto.items.filter(deleted_at__isnull=True).exists():
@@ -145,12 +179,21 @@ def registrar_decision_cliente(presupuesto, decision, usuario):
 
 
 @transaction.atomic
-def transicionar_obra(obra, nuevo_estado, usuario, motivo=''):
+def transicionar_obra(obra, nuevo_estado, usuario, motivo='', costos_confirmados=False):
     obra = Obra.objects.select_for_update().get(pk=obra.pk)
     if nuevo_estado not in TRANSICIONES_OBRA.get(obra.estado_operativo, set()):
         raise ValidationError({'error': 'TRANSICION_NO_PERMITIDA', 'detalle': f"No se permite pasar de {obra.estado_operativo} a {nuevo_estado}."})
     if nuevo_estado == 'finalizada' and not obra.tecnico_responsable_id:
         raise ValidationError({'error': 'TECNICO_REQUERIDO', 'detalle': 'Asigne un técnico responsable antes de finalizar la obra.'})
+    if nuevo_estado == 'finalizada':
+        from .rentabilidad import pendientes_costos_finalizacion
+
+        pendientes = pendientes_costos_finalizacion(obra)
+        if costos_confirmados is not True:
+            pendientes.append('Confirme que registró todos los costos de la obra.')
+        if pendientes:
+            raise ValidationError({'error': 'COSTOS_INCOMPLETOS', 'detalle': ' '.join(pendientes)})
+        motivo = 'Costos de ejecución revisados y confirmados.'
     if nuevo_estado == 'cancelada' and Factura.objects.filter(obra=obra).exists():
         raise ValidationError({'error': 'FACTURAS_ASOCIADAS', 'detalle': 'No se puede cancelar una obra que ya tiene facturas emitidas, aunque todavía no estén pagadas.'})
     if nuevo_estado in {'suspendida', 'cancelada'} and not str(motivo).strip():
@@ -167,7 +210,15 @@ def transicionar_obra(obra, nuevo_estado, usuario, motivo=''):
         obra.fecha_termino = timezone.localdate()
         fields.extend(['estado_comercial', 'fecha_termino'])
     guardar_con_actor(obra, usuario, fields)
-    ObraEstadoHistorial.objects.create(obra=obra, estado_anterior=estado_anterior, estado_nuevo=nuevo_estado, usuario=usuario, observacion=str(motivo).strip())
+    responsable = (
+        {'usuario_nombre_finalizacion': usuario.get_full_name() or usuario.get_username(),
+         'usuario_rol_finalizacion': usuario.rol}
+        if nuevo_estado == 'finalizada' else {}
+    )
+    ObraEstadoHistorial.objects.create(
+        obra=obra, estado_anterior=estado_anterior, estado_nuevo=nuevo_estado,
+        usuario=usuario, observacion=str(motivo).strip(), **responsable,
+    )
     registrar_evento(usuario=usuario, modulo='Obras y Proyectos', accion='cambio_estado_obra', resultado='exito', detalle=f"La obra {obra.codigo_obra} cambió al estado {nuevo_estado}.", entidad='Obra', entidad_id=obra.pk, valores_anteriores={'estado_operativo': estado_anterior}, valores_nuevos={'estado_operativo': nuevo_estado, 'motivo': str(motivo).strip()})
     return obra
 
@@ -256,6 +307,17 @@ def registrar_pago(factura, datos, usuario):
     obra = Obra.objects.select_for_update().get(pk=factura.obra_id)
     factura = Factura.objects.select_for_update().get(pk=factura.pk)
     monto = Decimal(str(datos['monto']))
+    referencias = Q()
+    for campo in ('folio_recibo', 'comprobante'):
+        if datos.get(campo):
+            referencias |= Q(**{f'{campo}__iexact': datos[campo]})
+    pagos = factura.pagos.all()
+    if referencias and pagos.filter(referencias).exists():
+        raise ValidationError({'comprobante': 'Ya existe un pago con ese folio o comprobante en esta factura.'})
+    if not referencias and pagos.filter(
+        monto=monto, fecha_pago=datos['fecha_pago'], metodo_pago__iexact=datos['metodo_pago'],
+    ).exists():
+        raise ValidationError({'comprobante': 'Ya existe un pago con esos datos. Si es otro pago, indique su comprobante o folio.'})
     if monto <= 0:
         raise ValidationError({'monto': 'El monto debe ser mayor que cero.'})
     if monto > factura.saldo_pendiente:
@@ -282,7 +344,13 @@ def registrar_nota_credito(factura, *, numero, monto, motivo, usuario):
         raise ValidationError({'monto': 'La nota de crédito debe ser positiva y no superar el saldo pendiente.'})
     saldo_anterior = factura.saldo_pendiente
     estado_anterior = factura.estado_pago
-    nota = NotaCredito.objects.create(factura=factura, numero=numero, monto=monto, motivo=motivo, usuario=usuario)
+    try:
+        with transaction.atomic():
+            nota = NotaCredito.objects.create(factura=factura, numero=numero, monto=monto, motivo=motivo, usuario=usuario)
+    except IntegrityError:
+        if NotaCredito.objects.filter(numero=numero).exists():
+            raise ValidationError({'numero': 'Ya existe una nota de crédito con ese número.'}) from None
+        raise
     factura.saldo_pendiente -= monto
     factura.estado_pago = 'SALDADO' if factura.saldo_pendiente == 0 else 'PARCIAL'
     guardar_con_actor(factura, usuario, ['saldo_pendiente', 'estado_pago'])
@@ -313,7 +381,7 @@ def revertir_pago(pago, *, monto, motivo, usuario):
     return reversa
 
 
-def soft_delete_instance(instance, usuario, valores_anteriores=None):
+def soft_delete_instance(instance, usuario, valores_anteriores=None, *, motivo=''):
     if isinstance(instance, CostoMaterial) and (instance.obra.estado_operativo in {'finalizada', 'cancelada'} or instance.obra.estado_comercial == 'cerrada'):
         raise ValidationError({'error': 'OBRA_CERRADA', 'detalle': 'No se pueden modificar costos de una obra finalizada, cancelada o cerrada comercialmente.'})
     if isinstance(instance, Cliente) and (instance.contratos.exists() or instance.presupuestos.exists()):
@@ -340,4 +408,7 @@ def soft_delete_instance(instance, usuario, valores_anteriores=None):
     if hasattr(instance, 'updated_by_id'):
         instance.updated_by = usuario
     instance.soft_delete()
-    registrar_evento(usuario=usuario, modulo=instance._meta.verbose_name_plural, accion='eliminacion_logica', resultado='exito', detalle=f"Se marcó como eliminado el registro {instance}.", entidad=instance.__class__.__name__, entidad_id=instance.pk, valores_anteriores=valores_anteriores or {}, valores_nuevos={'deleted_at': instance.deleted_at.isoformat() if instance.deleted_at else None})
+    detalle = f"Se marcó como eliminado el registro {instance}."
+    if motivo:
+        detalle += f' Motivo: {motivo}'
+    registrar_evento(usuario=usuario, modulo=instance._meta.verbose_name_plural, accion='eliminacion_logica', resultado='exito', detalle=detalle, entidad=instance.__class__.__name__, entidad_id=instance.pk, valores_anteriores=valores_anteriores or {}, valores_nuevos={'deleted_at': instance.deleted_at.isoformat() if instance.deleted_at else None})

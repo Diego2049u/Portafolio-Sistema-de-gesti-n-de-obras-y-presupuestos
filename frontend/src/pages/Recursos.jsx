@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
+import { MaterialesObra } from '../components/MaterialesObra';
+import SaldosTotalesMateriales from '../components/SaldosTotalesMateriales';
 
 const input = 'mt-1 block w-full rounded-lg bg-surface-container-low px-3 py-2';
 const empty = { nombre: '', unidad: '', servicios: [], activo: true };
@@ -11,6 +13,10 @@ export default function Recursos({ userRole }) {
   const [query, setQuery] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [obras, setObras] = useState(null);
+  const [obra, setObra] = useState(null);
+  const [consultandoObras, setConsultandoObras] = useState(false);
+  const [verSaldosTotales, setVerSaldosTotales] = useState(false);
   const manager = userRole === 'ADMIN_GENERAL';
 
   useEffect(() => {
@@ -23,6 +29,18 @@ export default function Recursos({ userRole }) {
     }
     return () => { active = false; };
   }, [manager]);
+
+  async function consultarSaldos() {
+    setConsultandoObras(true);
+    setError('');
+    try {
+      setObras(await api.listAll('/obras/'));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setConsultandoObras(false);
+    }
+  }
 
   async function guardar(event) {
     event.preventDefault();
@@ -53,9 +71,26 @@ export default function Recursos({ userRole }) {
     <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6 p-6">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div><h1 className="text-3xl font-bold text-on-surface">Recursos</h1><p className="mt-1 text-on-surface-variant">Catálogo de materiales para asignar a obras.</p></div>
-        {manager && <button type="button" className="rounded-lg bg-primary-container px-4 py-2 text-on-primary"
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="rounded-lg bg-surface-container px-4 py-2" aria-haspopup="dialog"
+            onClick={() => setVerSaldosTotales(true)}>Consultar saldos totales</button>
+          <button type="button" className="rounded-lg bg-surface-container px-4 py-2"
+            disabled={consultandoObras} onClick={consultarSaldos}>Consultar saldos por obra</button>
+          {manager && <button type="button" className="rounded-lg bg-primary-container px-4 py-2 text-on-primary"
           disabled={busy || !rows} onClick={() => { setForm(empty); setError(''); }}>Nuevo material</button>}
+        </div>
       </header>
+      {verSaldosTotales && <SaldosTotalesMateriales onClose={() => setVerSaldosTotales(false)} />}
+      {consultandoObras && <p role="status">Cargando obras…</p>}
+      {obras?.length === 0 && <p>No hay obras disponibles.</p>}
+      {obras?.length > 0 && <label className="block max-w-lg">Obra
+        <select className={input} value={obra?.id ?? ''} onChange={(event) => setObra(obras.find((item) => item.id === Number(event.target.value)))}>
+          <option value="">Seleccionar obra</option>
+          {obras.map((item) => <option key={item.id} value={item.id}>{item.codigo_obra} · {item.nombre_obra}</option>)}
+        </select>
+      </label>}
+      {obra && <MaterialesObra key={obra.id} obra={obra} onClose={() => setObra(null)}
+        canRegisterWaste={manager || userRole === 'SUPERVISOR'} />}
       {error && <p role="alert" className="rounded-lg bg-error-container p-3 text-on-error-container">{error}</p>}
       {form && <form onSubmit={guardar} className="space-y-4 rounded-xl bg-surface-container-lowest p-4 shadow-sm">
         <h2 className="text-xl font-bold">{form.id ? 'Editar material' : 'Nuevo material'}</h2>
@@ -92,7 +127,7 @@ export default function Recursos({ userRole }) {
               <td className="p-3 font-medium">{row.nombre}</td><td className="p-3">{row.unidad}</td>
               <td className="p-3">{row.servicios.join(', ') || 'Todos los servicios'}</td>
               <td className="p-3">{row.activo ? 'Activo' : 'Inactivo'}</td>
-              {manager && <td className="p-3"><button type="button" className="text-primary" disabled={busy}
+              {manager && <td className="p-3"><button type="button" className="link-action" disabled={busy}
                 onClick={() => { setForm(row); setError(''); }}>Editar</button></td>}
             </tr>)}</tbody>
           </table>

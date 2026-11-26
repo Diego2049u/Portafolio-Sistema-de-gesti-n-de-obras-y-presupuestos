@@ -47,7 +47,7 @@ export default function CalendarioTecnico({ nombre, obtenerBloques, onPeriodoCha
     </div>
 
     {loading && <p role="status" className="px-6 py-2 text-secondary">Consultando agenda…</p>}
-    {error && <p role="alert" className="px-6 py-2 text-error">{error} <button type="button" onClick={reintentar} className="underline">Reintentar</button></p>}
+    {error && <p role="alert" className="px-6 py-2 text-error">{error} <button type="button" onClick={reintentar} className="link-action">Reintentar</button></p>}
     {sinPlanificar && <p role="status" className="px-6 py-2 text-tertiary">Existen obras sin planificación. Las horas libres aún no pueden confirmarse como disponibles.</p>}
     <div className="calendario-horizontal" tabIndex={0} role="region" aria-label="Cuadrícula de disponibilidad" aria-busy={loading}>
       <div className={`calendario-contenido ${vista === 'dia' ? 'calendario-dia' : ''}`} style={{ '--dias': dias.length }}>

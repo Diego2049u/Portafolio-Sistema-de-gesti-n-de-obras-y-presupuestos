@@ -6,8 +6,8 @@ from api.auth_views import CookieLoginView, CookieLogoutView, CookieRefreshView,
 from api.reportes import ReporteView, ReporteFiltrosView
 from api.views import (
     AuditoriaLogViewSet, CategoriaServicioViewSet, ClienteViewSet, ContratoViewSet,
-    CostoMaterialViewSet, DashboardResumenView, FacturaViewSet, ObraViewSet, PagoViewSet,
-    MaterialViewSet, PresupuestoViewSet, UsuarioViewSet,
+    CostoMaterialViewSet, DashboardOtrosCostosView, DashboardResumenView, FacturaViewSet, ObraViewSet, PagoViewSet,
+    GastoGeneralViewSet, MaterialViewSet, PresupuestoViewSet, ProveedorViewSet, UsuarioViewSet,
 )
 
 router = DefaultRouter()
@@ -19,6 +19,8 @@ router.register(r'presupuestos', PresupuestoViewSet)
 router.register(r'obras', ObraViewSet)
 router.register(r'materiales', MaterialViewSet)
 router.register(r'costos', CostoMaterialViewSet)
+router.register(r'proveedores', ProveedorViewSet)
+router.register(r'gastos-generales', GastoGeneralViewSet)
 router.register(r'facturas', FacturaViewSet)
 router.register(r'pagos', PagoViewSet)
 router.register(r'auditoria', AuditoriaLogViewSet)
@@ -32,6 +34,7 @@ urlpatterns = [
     path('api/auth/logout/', CookieLogoutView.as_view(), name='cookie-logout'),
     path('api/auth/me/', CurrentUserView.as_view(), name='current-user'),
     path('api/dashboard/resumen/', DashboardResumenView.as_view(), name='dashboard-resumen'),
+    path('api/dashboard/obras/<int:obra_id>/otros-costos/', DashboardOtrosCostosView.as_view(), name='dashboard-otros-costos'),
     path('api/reportes/filtros/', ReporteFiltrosView.as_view(), name='reportes-filtros'),
     path('api/reportes/', ReporteView.as_view(), name='reportes'),
 ]

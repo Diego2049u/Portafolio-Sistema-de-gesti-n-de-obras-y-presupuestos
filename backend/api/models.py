@@ -203,6 +203,11 @@ class Presupuesto(SoftDeleteModel):
     monto_neto = models.DecimalField(max_digits=12, decimal_places=0, default=0)
     iva = models.DecimalField(max_digits=12, decimal_places=0, default=0)
     monto_total = models.DecimalField(max_digits=12, decimal_places=0, default=0)
+    contingencia_porcentaje = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    margen_objetivo = models.DecimalField(max_digits=4, decimal_places=2, null=True, blank=True)
+    costo_base = models.DecimalField(max_digits=12, decimal_places=0, null=True, blank=True)
+    reserva_imprevistos = models.DecimalField(max_digits=12, decimal_places=0, null=True, blank=True)
+    ganancia_prevista = models.DecimalField(max_digits=12, decimal_places=0, null=True, blank=True)
     estado = models.CharField(max_length=24, choices=ESTADOS, default='borrador')
     requiere_aprobacion_gerencia = models.BooleanField(default=False)
     aprobacion_gerencia = models.CharField(max_length=20, choices=ESTADOS_GERENCIA, default='no_requerida')
@@ -224,6 +229,7 @@ class ItemPresupuesto(SoftDeleteModel):
     cantidad = models.PositiveIntegerField(default=1)
     unidad = models.CharField(max_length=10, default='un')
     precio_unitario = models.DecimalField(max_digits=12, decimal_places=0)
+    costo_unitario = models.DecimalField(max_digits=12, decimal_places=0, null=True, blank=True)
 
     @property
     def subtotal(self):
@@ -314,6 +320,17 @@ class ObraMaterial(models.Model):
         ]
 
 
+    def saldo_registrado(self):
+        movimientos = list(self.movimientos.all())
+        if not movimientos:
+            return None
+        entradas_netas = sum(
+            movimiento.cantidad if movimiento.tipo == MovimientoMaterial.Tipo.ENTRADA else -movimiento.cantidad
+            for movimiento in movimientos
+        )
+        return entradas_netas - sum(merma.cantidad for merma in self.mermas.all())
+
+
 class MermaMaterial(models.Model):
     asignacion = models.ForeignKey(ObraMaterial, on_delete=models.PROTECT, related_name='mermas')
     cantidad = models.DecimalField(max_digits=12, decimal_places=3)
@@ -326,6 +343,46 @@ class MermaMaterial(models.Model):
         constraints = [
             models.CheckConstraint(check=models.Q(cantidad__gt=0), name='merma_material_cantidad_positiva'),
         ]
+
+
+class MovimientoMaterial(models.Model):
+    class Tipo(models.TextChoices):
+        ENTRADA = 'entrada', 'Entrada'
+        CONSUMO = 'consumo', 'Consumo'
+
+    asignacion = models.ForeignKey(ObraMaterial, on_delete=models.PROTECT, related_name='movimientos')
+    tipo = models.CharField(max_length=7, choices=Tipo.choices)
+    cantidad = models.DecimalField(max_digits=12, decimal_places=3)
+    motivo = models.CharField(max_length=255)
+    referencia = models.CharField(max_length=100, blank=True)
+    fecha = models.DateTimeField(auto_now_add=True)
+    registrado_por = models.ForeignKey(Usuario, on_delete=models.PROTECT)
+
+    class Meta:
+        ordering = ['-fecha', '-pk']
+        constraints = [
+            models.CheckConstraint(condition=models.Q(cantidad__gt=0), name='mov_material_cantidad_positiva'),
+            models.CheckConstraint(condition=models.Q(tipo__in=['entrada', 'consumo']), name='mov_material_tipo_valido'),
+            models.UniqueConstraint(
+                models.functions.Lower('referencia'), 'asignacion',
+                condition=models.Q(tipo='entrada') & ~models.Q(referencia=''),
+                name='referencia_unica_por_asignacion',
+            ),
+        ]
+
+
+class Proveedor(SoftDeleteModel):
+    rut = models.CharField(max_length=15, unique=True)
+    razon_social = models.CharField(max_length=150)
+    correo = models.EmailField(blank=True)
+    telefono = models.CharField(max_length=30, blank=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['razon_social', 'pk']
+
+    def __str__(self):
+        return self.razon_social
 
 
 class CostoMaterial(SoftDeleteModel):
@@ -342,15 +399,41 @@ class CostoMaterial(SoftDeleteModel):
     descripcion = models.TextField()
     comprobante = models.URLField(blank=True, null=True)
     fecha = models.DateField(auto_now_add=True)
+    cantidad_real = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
+    unidad_real = models.CharField(max_length=20, blank=True)
+    costo_unitario_real = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    despacho = models.ForeignKey(MovimientoMaterial, null=True, blank=True, on_delete=models.PROTECT)
+    proveedor = models.ForeignKey(Proveedor, null=True, blank=True, on_delete=models.PROTECT)
 
     class Meta:
         indexes = [models.Index(fields=['fecha', 'obra'], name='costo_fecha_obra_idx')]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['despacho'], condition=models.Q(deleted_at__isnull=True),
+                name='un_costo_activo_por_despacho',
+            ),
+        ]
 
     def soft_delete(self):
         if self.obra.estado_operativo in {'finalizada', 'cancelada'} or self.obra.estado_comercial == 'cerrada':
             from django.core.exceptions import ValidationError
             raise ValidationError('No se pueden modificar costos de una obra finalizada, cancelada o cerrada comercialmente.')
         super().soft_delete()
+
+
+class GastoGeneral(SoftDeleteModel):
+    fecha = models.DateField(db_index=True)
+    descripcion = models.CharField(max_length=255)
+    monto = models.DecimalField(max_digits=12, decimal_places=0)
+
+    class Meta:
+        ordering = ['-fecha', '-pk']
+        constraints = [
+            models.CheckConstraint(condition=models.Q(monto__gt=0), name='gasto_general_monto_positivo'),
+        ]
+
+    def __str__(self):
+        return self.descripcion
 
 
 class Factura(SoftDeleteModel):
@@ -431,6 +514,8 @@ class ObraEstadoHistorial(models.Model):
     estado_anterior = models.CharField(max_length=20, blank=True)
     estado_nuevo = models.CharField(max_length=20, choices=Obra.ESTADOS)
     usuario = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    usuario_nombre_finalizacion = models.CharField(max_length=301, blank=True)
+    usuario_rol_finalizacion = models.CharField(max_length=20, choices=Usuario.ROLES, blank=True)
     fecha = models.DateTimeField(auto_now_add=True, db_index=True)
     observacion = models.TextField(blank=True)
 

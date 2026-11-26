@@ -24,7 +24,7 @@ export default function Sidebar({ userRole }) {
         <span aria-hidden="true" className={`material-symbols-outlined transition-transform duration-300 motion-reduce:transition-none ${collapsed ? 'rotate-180' : ''}`}>chevron_left</span>
       </button>
       <div className="flex flex-col gap-6 overflow-hidden px-2 py-4">
-        <div className="flex h-10 items-center">
+        <div className="flex h-10 items-center gap-3">
           <img src={flyagLogo} alt="FYAG Logo" className="h-10 w-12 shrink-0 object-contain" />
           <div className={`flex flex-col ${labelClass} ${labelWidth}`}>
             <span className="font-headline-sm text-on-surface font-bold text-sm">FYAG OBRAS</span>

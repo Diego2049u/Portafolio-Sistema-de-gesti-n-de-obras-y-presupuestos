@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, withQuery } from '../api/client';
 import { BudgetBreakdown, CountBreakdown, SalesTrend } from '../components/DashboardCharts';
+import RentabilidadObras from '../components/RentabilidadObras';
 
 const currency = new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP' });
 const clp = (value) => currency.format(value ?? 0);
@@ -131,6 +132,7 @@ export default function Dashboard() {
         <button type="submit" disabled={loading} className="self-end rounded bg-surface-container px-3 py-2 disabled:opacity-60">Aplicar filtros</button>
       </form>
 
+      <RentabilidadObras rentabilidad={data?.rentabilidad} format={clp} />
       <section aria-label="Indicadores gerenciales" aria-busy={loading} className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard title={usesCurrentMonth ? 'Ventas netas del mes' : 'Ventas netas del período'} accent="bg-primary"
           value={data ? clp(m.ventas_facturadas?.monto_total) : '—'}

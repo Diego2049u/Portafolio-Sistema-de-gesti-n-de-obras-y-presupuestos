@@ -72,7 +72,8 @@ class ObraPermission(RolePermission):
 class MaterialPermission(RolePermission):
     role_actions = {
         'list': {SUPERVISOR}, 'retrieve': {SUPERVISOR},
-        'materiales': {SUPERVISOR}, 'registrar_merma': {SUPERVISOR},
+        'saldos_totales': {SUPERVISOR},
+        'materiales': {SUPERVISOR}, 'registrar_merma': {SUPERVISOR}, 'registrar_movimiento_material': {SUPERVISOR},
     }
 
 
@@ -81,6 +82,7 @@ class CostoPermission(RolePermission):
         'list': {FINANZAS, SUPERVISOR}, 'retrieve': {FINANZAS, SUPERVISOR},
         'create': {FINANZAS, SUPERVISOR}, 'update': {FINANZAS, SUPERVISOR},
         'partial_update': {FINANZAS, SUPERVISOR}, 'destroy': {FINANZAS, SUPERVISOR},
+        'despachos': {FINANZAS, SUPERVISOR},
     }
 
 
@@ -88,7 +90,7 @@ class FacturaPermission(RolePermission):
     role_actions = {
         'list': {FINANZAS}, 'retrieve': {FINANZAS}, 'create': {FINANZAS},
         'update': {FINANZAS}, 'partial_update': {FINANZAS}, 'destroy': {FINANZAS},
-        'notas_credito': {FINANZAS},
+        'notas_credito': {FINANZAS}, 'pendientes': {FINANZAS},
     }
 
 
@@ -109,6 +111,20 @@ class CategoriaServicioPermission(RolePermission):
 
 class AuditoriaPermission(RolePermission):
     pass
+
+
+class GastoGeneralPermission(RolePermission):
+    role_actions = {
+        'list': {FINANZAS}, 'retrieve': {FINANZAS}, 'create': {FINANZAS},
+        'update': {FINANZAS}, 'partial_update': {FINANZAS}, 'destroy': {FINANZAS},
+    }
+
+
+class ProveedorPermission(RolePermission):
+    role_actions = {
+        'list': {FINANZAS, SUPERVISOR}, 'retrieve': {FINANZAS, SUPERVISOR},
+        'create': {FINANZAS}, 'update': {FINANZAS}, 'partial_update': {FINANZAS},
+    }
 
 
 class DashboardPermission(BasePermission):

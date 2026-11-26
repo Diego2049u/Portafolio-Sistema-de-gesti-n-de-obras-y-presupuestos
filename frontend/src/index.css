@@ -1,3 +1,42 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer components {
+  .link-action {
+    @apply inline-flex min-h-6 items-center justify-center gap-1 rounded-full bg-gray-300 px-3 py-1 text-center text-xs font-normal leading-4 text-gray-900 transition duration-300;
+    @apply focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .link-action:not(:disabled):hover {
+    @apply bg-gray-800 text-white motion-safe:-translate-y-1;
+  }
+
+  .link-action-danger {
+    @apply text-error;
+  }
+
+  .historial-obra::backdrop {
+    @apply bg-black/[0.45];
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .historial-obra[open] {
+    animation: historial-obra-entrada 520ms ease-out;
+  }
+
+  .historial-obra[open]::backdrop {
+    animation: historial-obra-fondo 520ms ease-out;
+  }
+}
+
+@keyframes historial-obra-entrada {
+  from { opacity: 0; transform: translateY(0.75rem); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes historial-obra-fondo {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

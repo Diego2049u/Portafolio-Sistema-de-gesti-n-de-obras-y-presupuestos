@@ -4,6 +4,7 @@ from datetime import timedelta
 from django.utils import timezone
 
 from .models import CostoMaterial, Factura, MermaMaterial, NotaCredito, Obra, Pago, Presupuesto, ReversaPago
+from .rentabilidad import calcular_rentabilidad
 
 
 ESTADOS_PENDIENTES_PRESUPUESTO = ('pendiente_gerencia', 'enviado')
@@ -186,6 +187,9 @@ def construir_resumen_dashboard(*, desde, hasta, cliente_id=None, tecnico_id=Non
 
     return {
         **merma,
+        'rentabilidad': calcular_rentabilidad(
+            obras, desde, hasta, incluir_empresa=not (cliente_id or tecnico_id or estado_obra),
+        ),
         'moneda': 'CLP',
         'periodo': {'desde': desde.isoformat(), 'hasta': hasta.isoformat()},
         'filtros': {

@@ -94,6 +94,13 @@ export const NAV_ITEMS = [
     roles: [ROLES.ADMIN_GENERAL, ROLES.GERENCIA, ROLES.FINANZAS, ROLES.SUPERVISOR]
   },
   {
+    id: 'proveedores',
+    label: 'Proveedores',
+    icon: 'local_shipping',
+    path: '/proveedores',
+    roles: [ROLES.ADMIN_GENERAL, ROLES.GERENCIA, ROLES.FINANZAS, ROLES.SUPERVISOR]
+  },
+  {
     id: 'facturacion',
     label: 'Facturación y Cobranza',
     icon: 'receipt_long',

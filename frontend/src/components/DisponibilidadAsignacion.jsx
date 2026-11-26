@@ -47,7 +47,7 @@ export default function DisponibilidadAsignacion({ form, setForm, onResultado })
       <p className="font-semibold">{seleccionado.asignable ? `${seleccionado.nombre} está disponible para todo el período.` : `${seleccionado.nombre} no está disponible para todo el período. Cambia el técnico o ajusta las fechas.`}</p>
       {!!seleccionado.conflictos.length && <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto">{seleccionado.conflictos.map((c, i) => <li key={i}>{c.obra}: {fechaHora(c.inicio)} – {fechaHora(c.fin)}</li>)}</ul>}
       {!!seleccionado.sin_planificar.length && <p className="mt-2">Completa primero la planificación de: {seleccionado.sin_planificar.map((o) => o.nombre).join(', ')}.</p>}
-      <Link className="mt-2 inline-block text-primary underline" to={`/tecnicos/${seleccionado.id}`} target="_blank" rel="noreferrer">Ver calendario del técnico</Link>
+      <Link className="link-action mt-2" to={`/tecnicos/${seleccionado.id}`} target="_blank" rel="noreferrer">Ver calendario del técnico</Link>
     </div>}
   </div>;
 }

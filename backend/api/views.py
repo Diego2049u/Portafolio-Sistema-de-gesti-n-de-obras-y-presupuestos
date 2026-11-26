@@ -1,10 +1,10 @@
-from django.db.models import Exists, OuterRef, Q
+from django.db.models import Exists, F, OuterRef, Q, Subquery, Sum
+from django.db.models.functions import Coalesce
 from django.db import transaction
 from django.core.cache import cache
 from django.core.serializers.json import DjangoJSONEncoder
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
-from django.utils.dateparse import parse_date
 import hashlib
 import json
 from rest_framework import viewsets
@@ -15,21 +15,22 @@ from rest_framework.views import APIView
 
 from .dashboard import construir_resumen_dashboard
 from .dashboard_serializers import DashboardFiltroSerializer
+from .rentabilidad import despachos_pendientes, detallar_otros_costos
 from .models import (
-    AuditoriaLog, CategoriaServicio, Cliente, Contrato, CostoMaterial, Factura, Material,
-    Obra, ObraEstadoHistorial, ObraMaterial, Pago, Presupuesto, Usuario, VersionPresupuesto,
+    AuditoriaLog, CategoriaServicio, Cliente, Contrato, CostoMaterial, Factura, GastoGeneral, Material,
+    MovimientoMaterial, NotaCredito, Obra, ObraEstadoHistorial, ObraMaterial, Pago, Presupuesto, Proveedor, Usuario, VersionPresupuesto,
 )
 from .permissions import (
     AuditoriaPermission, CategoriaServicioPermission, ClientePermission,
-    ContratoPermission, CostoPermission, FacturaPermission, MaterialPermission, ObraPermission,
-    PagoPermission, PresupuestoPermission, UserPermission, DashboardPermission,
+    ContratoPermission, CostoPermission, FacturaPermission, GastoGeneralPermission, MaterialPermission, ObraPermission,
+    PagoPermission, PresupuestoPermission, ProveedorPermission, UserPermission, DashboardPermission,
 )
 from .serializers import (
     AuditoriaLogSerializer, CategoriaServicioSerializer, ClienteSerializer,
-    ContratoSerializer, CostoMaterialSerializer, EstablecerPasswordSerializer, FacturaSerializer,
-    MaterialSerializer, MermaMaterialSerializer, NotaCreditoSerializer, ObraMaterialSerializer,
+    ContratoSerializer, CostoMaterialSerializer, EstablecerPasswordSerializer, FacturaSerializer, GastoGeneralSerializer,
+    MaterialSerializer, MermaMaterialSerializer, MovimientoMaterialSerializer, NotaCreditoSerializer, ObraMaterialSerializer,
     ObraSerializer, PagoSerializer, PresupuestoSerializer,
-    ReversaPagoSerializer, UsuarioSerializer,
+    ProveedorSerializer, ReversaPagoSerializer, UsuarioSerializer,
 )
 from .services import (
     cerrar_obra_comercial, decidir_aprobacion_gerencia, exigir_aprobacion_gerencia, registrar_decision_cliente,
@@ -38,7 +39,7 @@ from .services import (
 )
 from .pdf_generador import generar_pdf_presupuesto
 from .disponibilidad import CHILE, agenda, evaluar, validar_rango
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -69,9 +70,10 @@ def _apply_date_range(queryset, params, field):
         raw = params.get(key)
         if not raw:
             continue
-        value = parse_date(raw)
-        if value is None:
-            raise ValidationError({key: 'Use el formato de fecha YYYY-MM-DD.'})
+        try:
+            value = serializers.DateField().run_validation(raw)
+        except ValidationError as exc:
+            raise ValidationError({key: exc.detail}) from exc
         bounds[f'{field}__{lookup}'] = value
     if 'desde' in params and 'hasta' in params and bounds:
         if bounds.get(f'{field}__gte') and bounds.get(f'{field}__lte') and bounds[f'{field}__gte'] > bounds[f'{field}__lte']:
@@ -278,6 +280,37 @@ class MaterialViewSet(AuditedModelViewSet):
     http_method_names = ['get', 'post', 'patch', 'head', 'options']
     module_name = 'Recursos'
 
+    @action(detail=False, methods=['get'], url_path='saldos-totales')
+    def saldos_totales(self, request):
+        materiales = {
+            material.pk: {
+                'id': material.pk, 'nombre': material.nombre, 'unidad': material.unidad,
+                'saldo': None, 'sin_entradas': 0, 'obras': [],
+            }
+            for material in Material.objects.order_by('nombre', 'pk')
+        }
+        asignaciones = ObraMaterial.objects.filter(obra__deleted_at__isnull=True).select_related(
+            'obra',
+        ).prefetch_related('movimientos', 'mermas').order_by('obra__codigo_obra', 'pk')
+        for asignacion in asignaciones:
+            material = materiales.get(asignacion.material_id)
+            if material is None:
+                continue
+            saldo = asignacion.saldo_registrado()
+            if saldo is None:
+                material['sin_entradas'] += 1
+            else:
+                material['saldo'] = (material['saldo'] or 0) + saldo
+            material['obras'].append({
+                'codigo': asignacion.obra.codigo_obra,
+                'nombre': asignacion.obra.nombre_obra,
+                'saldo': str(saldo) if saldo is not None else None,
+            })
+        for material in materiales.values():
+            if material['saldo'] is not None:
+                material['saldo'] = str(material['saldo'])
+        return Response(list(materiales.values()))
+
     def get_queryset(self):
         queryset = super().get_queryset()
         if self.request.query_params.get('activo') == '1':
@@ -293,7 +326,7 @@ class ObraViewSet(AuditedModelViewSet):
 
     @action(detail=True, methods=['get'], url_path='materiales', permission_classes=[MaterialPermission])
     def materiales(self, request, pk=None):
-        asignaciones = self.get_object().materiales.select_related('material').prefetch_related('mermas')
+        asignaciones = self.get_object().materiales.select_related('material').prefetch_related('mermas', 'movimientos')
         return Response(ObraMaterialSerializer(asignaciones, many=True).data)
 
     @action(detail=True, methods=['post'], url_path=r'materiales/(?P<asignacion_id>[0-9]+)/mermas',
@@ -306,11 +339,49 @@ class ObraViewSet(AuditedModelViewSet):
         asignacion = get_object_or_404(ObraMaterial, pk=asignacion_id, obra=obra)
         serializer = MermaMaterialSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        saldo = asignacion.saldo_registrado()
+        if saldo is not None and serializer.validated_data['cantidad'] > saldo:
+            raise ValidationError({'cantidad': 'La merma supera el saldo registrado.'})
         merma = serializer.save(asignacion=asignacion, registrado_por=request.user)
         registrar_evento(usuario=request.user, modulo='Recursos', accion='crear', resultado='exito',
                         detalle=f'Merma registrada en {obra.codigo_obra}.', entidad='MermaMaterial',
                         entidad_id=merma.pk, valores_nuevos=self.snapshot_instance(merma))
-        return Response(serializer.data, status=201)
+        return Response({**serializer.data, 'saldo': str(saldo - merma.cantidad) if saldo is not None else None}, status=201)
+
+    @action(detail=True, methods=['post'], url_path=r'materiales/(?P<asignacion_id>[0-9]+)/movimientos',
+            permission_classes=[MaterialPermission])
+    @transaction.atomic
+    def registrar_movimiento_material(self, request, pk=None, asignacion_id=None):
+        obra = get_object_or_404(Obra.objects.select_for_update(), pk=self.get_object().pk)
+        if obra.estado_operativo != 'en-proceso' or obra.estado_comercial == 'cerrada':
+            raise ValidationError({'obra': 'Solo puedes registrar movimientos en una obra en proceso.'})
+        asignacion = get_object_or_404(ObraMaterial.objects.select_related('material'), pk=asignacion_id, obra=obra)
+        serializer = MovimientoMaterialSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        saldo = asignacion.saldo_registrado()
+        cantidad = serializer.validated_data['cantidad']
+        referencia = serializer.validated_data.get('referencia', '')
+        if serializer.validated_data['tipo'] == MovimientoMaterial.Tipo.CONSUMO:
+            if referencia:
+                raise ValidationError({'referencia': 'La referencia de despacho se usa en las entradas.'})
+            if saldo is None or cantidad > saldo:
+                raise ValidationError({'cantidad': 'El consumo requiere un saldo registrado suficiente.'})
+        else:
+            entradas = asignacion.movimientos.filter(tipo=MovimientoMaterial.Tipo.ENTRADA)
+            if referencia and entradas.filter(referencia__iexact=referencia).exists():
+                raise ValidationError({'referencia': 'Este despacho ya está registrado para el material.'})
+            if not referencia and entradas.filter(
+                fecha__date=timezone.localdate(), cantidad=cantidad,
+                motivo__iexact=serializer.validated_data['motivo'],
+            ).exists():
+                raise ValidationError({'referencia': 'Ya hay una entrada igual hoy. Si es otro despacho, indique su referencia.'})
+            if saldo is None and cantidad < sum(merma.cantidad for merma in asignacion.mermas.all()):
+                raise ValidationError({'cantidad': 'La entrada inicial debe incluir las mermas ya registradas.'})
+        movimiento = serializer.save(asignacion=asignacion, registrado_por=request.user)
+        registrar_evento(usuario=request.user, modulo='Recursos', accion='registrar_movimiento',
+                         resultado='exito', detalle=movimiento.motivo, entidad='MovimientoMaterial',
+                         entidad_id=movimiento.pk, valores_nuevos=self.snapshot_instance(movimiento))
+        return Response(ObraMaterialSerializer(asignacion).data, status=201)
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -365,16 +436,39 @@ class ObraViewSet(AuditedModelViewSet):
         hasta = serializers.DateField().run_validation(request.query_params.get('hasta'))
         if desde > hasta or (hasta - desde).days > 366:
             raise ValidationError({'periodo': 'Consulte entre 1 y 367 días consecutivos.'})
+        if hasta == date.max:
+            raise ValidationError({'hasta': 'Elija una fecha final anterior al límite del calendario.'})
         return Response(agenda(tecnico, datetime.combine(desde, time.min, CHILE), datetime.combine(hasta + timedelta(days=1), time.min, CHILE)))
 
     @action(detail=True, methods=['get'], url_path='historial-estados')
     def historial_estados(self, request, pk=None):
         obra = self.get_object()
-        return Response(list(ObraEstadoHistorial.objects.filter(obra=obra).values('id', 'estado_anterior', 'estado_nuevo', 'usuario_id', 'fecha', 'observacion')))
+        eventos = obra.historial_estados.select_related('usuario')
+        return Response([{
+            'id': evento.pk,
+            'estado_anterior': evento.estado_anterior,
+            'estado_nuevo': evento.estado_nuevo,
+            'usuario_id': evento.usuario_id,
+            'fecha': evento.fecha,
+            'observacion': evento.observacion,
+            'usuario_nombre': evento.usuario_nombre_finalizacion or (
+                (evento.usuario.get_full_name() or evento.usuario.get_username()) if evento.usuario else None
+            ),
+            'usuario_rol_finalizacion': evento.usuario_rol_finalizacion or None,
+            'usuario_rol_finalizacion_nombre': evento.get_usuario_rol_finalizacion_display() or None,
+            'usuario_rol_actual_nombre': (
+                evento.usuario.get_rol_display()
+                if evento.estado_nuevo == 'finalizada' and not evento.usuario_rol_finalizacion and evento.usuario
+                else None
+            ),
+        } for evento in eventos])
 
     @action(detail=True, methods=['post'], url_path='transicionar')
     def transicionar(self, request, pk=None):
-        obra = transicionar_obra(self.get_object(), request.data.get('estado_operativo'), request.user, request.data.get('motivo', ''))
+        obra = transicionar_obra(
+            self.get_object(), request.data.get('estado_operativo'), request.user,
+            request.data.get('motivo', ''), costos_confirmados=request.data.get('costos_confirmados', False),
+        )
         return Response(self.get_serializer(obra).data)
 
     @action(detail=True, methods=['post'])
@@ -389,11 +483,53 @@ class ObraViewSet(AuditedModelViewSet):
         return Response(self.get_serializer(obra).data)
 
 
+class ProveedorViewSet(AuditedModelViewSet):
+    queryset = Proveedor.objects.all()
+    serializer_class = ProveedorSerializer
+    permission_classes = [ProveedorPermission]
+    http_method_names = ['get', 'post', 'patch', 'head', 'options']
+    module_name = 'Proveedores'
+
+
 class CostoMaterialViewSet(AuditedModelViewSet):
-    queryset = CostoMaterial.objects.select_related('obra').order_by('pk')
+    queryset = CostoMaterial.objects.select_related('obra', 'proveedor').order_by('pk')
     serializer_class = CostoMaterialSerializer
     permission_classes = [CostoPermission]
     module_name = 'Costos de obra'
+
+    @action(detail=False, methods=['get'], url_path=r'despachos/(?P<obra_id>[0-9]+)')
+    def despachos(self, request, obra_id=None):
+        obra = get_object_or_404(Obra, pk=obra_id)
+        return Response(despachos_pendientes([obra.pk]).values(
+            'id', 'cantidad', 'fecha', 'asignacion__material__nombre', 'asignacion__material__unidad',
+        ))
+
+    @staticmethod
+    def bloquear_obra_costos(obra_id, despacho=None, excluir=None):
+        obra = Obra.objects.select_for_update().get(pk=obra_id)
+        if obra.estado_operativo in {'finalizada', 'cancelada'} or obra.estado_comercial == 'cerrada':
+            raise ValidationError({'obra': 'La obra ya no admite cambios de costos.'})
+        if despacho and CostoMaterial.objects.filter(despacho=despacho).exclude(pk=excluir).exists():
+            raise ValidationError({'despacho': 'Este despacho ya tiene un costo registrado.'})
+
+    @transaction.atomic
+    def perform_create(self, serializer):
+        self.bloquear_obra_costos(serializer.validated_data['obra'].pk, serializer.validated_data.get('despacho'))
+        super().perform_create(serializer)
+
+    @transaction.atomic
+    def perform_update(self, serializer):
+        costo = serializer.instance
+        self.bloquear_obra_costos(costo.obra_id, serializer.validated_data.get('despacho', costo.despacho), costo.pk)
+        super().perform_update(serializer)
+
+    @transaction.atomic
+    def perform_destroy(self, instance):
+        self.bloquear_obra_costos(instance.obra_id)
+        motivo = serializers.CharField(max_length=1000, allow_blank=True).run_validation(
+            self.request.data.get('motivo', ''),
+        )
+        soft_delete_instance(instance, self.request.user, self.snapshot_instance(instance), motivo=motivo)
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -407,11 +543,51 @@ class CostoMaterialViewSet(AuditedModelViewSet):
         return _apply_date_range(queryset, params, 'fecha')
 
 
+class GastoGeneralViewSet(AuditedModelViewSet):
+    queryset = GastoGeneral.objects.all()
+    serializer_class = GastoGeneralSerializer
+    permission_classes = [GastoGeneralPermission]
+    module_name = 'Gastos generales'
+
+
 class FacturaViewSet(AuditedModelViewSet):
     queryset = Factura.objects.select_related('obra__presupuesto__cliente').order_by('pk')
     serializer_class = FacturaSerializer
     permission_classes = [FacturaPermission]
     module_name = 'Facturación y Cobranza'
+
+    @action(detail=False, methods=['get'], url_path='pendientes')
+    def pendientes(self, request):
+        hoy = timezone.localdate()
+        facturas = Factura.objects.filter(obra_id=OuterRef('pk')).order_by()
+        totales = facturas.values('obra_id').annotate(total=Sum('monto_total')).values('total')
+        creditos = NotaCredito.objects.filter(
+            factura__obra_id=OuterRef('pk'), factura__deleted_at__isnull=True,
+        ).order_by().values('factura__obra_id').annotate(total=Sum('monto')).values('total')
+        obras = Obra.objects.filter(estado_operativo='finalizada').exclude(estado_comercial='cerrada').annotate(
+            tiene_factura=Exists(facturas),
+            facturado=Coalesce(Subquery(totales), 0, output_field=Factura._meta.get_field('monto_total')),
+            acreditado=Coalesce(Subquery(creditos), 0, output_field=Factura._meta.get_field('monto_total')),
+        ).select_related('presupuesto__cliente').order_by(F('fecha_termino').asc(nulls_last=True), 'pk')
+        pendientes = []
+        for obra in obras:
+            saldo = max(0, obra.presupuesto.monto_total - obra.facturado + obra.acreditado)
+            if saldo or not obra.tiene_factura:
+                pendientes.append({
+                    'id': obra.pk, 'codigo': obra.codigo_obra, 'nombre': obra.nombre_obra,
+                    'cliente': obra.presupuesto.cliente.razon_social, 'fecha_termino': obra.fecha_termino,
+                    'dias': max(0, (hoy - obra.fecha_termino).days) if obra.fecha_termino else None,
+                    'saldo': saldo, 'tiene_factura': obra.tiene_factura,
+                })
+        cobranza = Factura.objects.select_related('obra__presupuesto__cliente').filter(
+            saldo_pendiente__gt=0, fecha_vencimiento__lte=hoy + timedelta(days=7),
+        ).order_by('fecha_vencimiento', 'pk')
+        return Response({'facturacion': pendientes, 'cobranza': [{
+            'id': factura.pk, 'numero': factura.numero_factura,
+            'cliente': factura.obra.presupuesto.cliente.razon_social,
+            'vencimiento': factura.fecha_vencimiento, 'dias': (factura.fecha_vencimiento - hoy).days,
+            'saldo': factura.saldo_pendiente,
+        } for factura in cobranza]})
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -488,6 +664,14 @@ class AuditoriaLogViewSet(viewsets.ReadOnlyModelViewSet):
         if busqueda:
             queryset = queryset.filter(Q(accion__icontains=busqueda) | Q(detalle__icontains=busqueda) | Q(entidad__icontains=busqueda))
         return _apply_date_range(queryset, params, 'fecha__date')
+
+
+class DashboardOtrosCostosView(APIView):
+    permission_classes = [DashboardPermission]
+
+    def get(self, request, obra_id):
+        obra = get_object_or_404(Obra, pk=obra_id)
+        return Response(detallar_otros_costos(obra))
 
 
 class DashboardResumenView(APIView):

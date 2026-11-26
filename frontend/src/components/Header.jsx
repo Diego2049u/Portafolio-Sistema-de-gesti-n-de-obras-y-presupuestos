@@ -1,4 +1,5 @@
 import { getRoleLabel } from '../config/navegacion';
+import AlertasFinancieras from './AlertasFinancieras';
 
 export default function Header({
   breadcrumb = 'FYAG ERP / Módulo Operativo',
@@ -18,21 +19,10 @@ export default function Header({
         </span>
       </div>
 
-      {/* Buscador Global y Perfil de Usuario */}
+      {/* Perfil de Usuario */}
       <div className="flex items-center gap-3 shrink-0">
-        <div className="relative hidden md:flex items-center">
-          <span className="material-symbols-outlined absolute left-2.5 text-secondary text-[18px]">
-            search
-          </span>
-          <input
-            type="text"
-            placeholder="Buscar obra, cliente, RUT..."
-            className="w-56 bg-surface-container-low text-on-surface text-xs pl-8 pr-3 py-1.5 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary transition-all"
-          />
-        </div>
-
-        {/* Perfil del Usuario Autenticado */}
-        <div className="flex items-center gap-2.5 pl-2 border-l border-outline-variant">
+        {['ADMIN_GENERAL', 'GERENCIA', 'FINANZAS'].includes(user?.role) && <AlertasFinancieras />}
+        <div className="flex items-center gap-2.5">
           <div className="flex flex-col text-right">
             <span className="font-headline-sm text-xs text-on-surface font-semibold">
               {userName}

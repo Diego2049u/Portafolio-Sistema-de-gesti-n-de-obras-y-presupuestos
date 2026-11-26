@@ -9,6 +9,7 @@ from .models import (
     AuditoriaLog,
     CategoriaServicio,
     Cliente,
+    CostoMaterial,
     Factura,
     ItemPresupuesto,
     NotaCredito,
@@ -221,6 +222,54 @@ class DashboardTests(FyagAPITestCase):
 
 
 class PresupuestoWorkflowTests(FyagAPITestCase):
+    def test_calcula_y_versiona_la_rentabilidad_del_presupuesto(self):
+        self.autenticar(self.finanzas)
+        creado = self.api.post('/api/presupuestos/', {
+            'cliente': self.cliente.pk,
+            'categoria_servicio': self.categoria.pk,
+            'contacto': 'Contacto de prueba',
+            'contingencia_porcentaje': '10.00',
+            'margen_objetivo': '20.00',
+            'items': [
+                {'descripcion': 'Materiales', 'cantidad': 2, 'costo_unitario': 300000},
+                {'descripcion': 'Instalación', 'cantidad': 1, 'costo_unitario': 400000},
+            ],
+        }, format='json')
+        self.assertEqual(creado.status_code, 201, creado.data)
+        self.assertEqual(creado.data['costo_base'], '1000000')
+        self.assertEqual(creado.data['reserva_imprevistos'], '100000')
+        self.assertEqual(creado.data['ganancia_prevista'], '275000')
+        self.assertEqual(creado.data['monto_neto'], '1375000')
+        self.assertEqual(creado.data['monto_total'], '1636250')
+        self.assertEqual([item['precio_unitario'] for item in creado.data['items']], ['412500', '550000'])
+
+        ruta = f"/api/presupuestos/{creado.data['id']}/"
+        cambio = self.api.patch(ruta, {'margen_objetivo': '0.00'}, format='json')
+        self.assertEqual(cambio.status_code, 200, cambio.data)
+        self.assertEqual(cambio.data['monto_neto'], '1100000')
+        self.assertEqual(cambio.data['ganancia_prevista'], '0')
+        versiones = self.api.get(f'{ruta}historial-versiones/').data
+        self.assertEqual(versiones[1]['snapshot']['ganancia_prevista'], '275000')
+        self.assertEqual(versiones[0]['snapshot']['items'][0]['costo_unitario'], '300000')
+        self.assertEqual(self.api.get(f'{ruta}exportar-pdf/').status_code, 200)
+
+    def test_borrador_historico_requiere_costos_para_configurar_rentabilidad(self):
+        self.autenticar(self.finanzas)
+        creado = self.api.post('/api/presupuestos/', {
+            'cliente': self.cliente.pk,
+            'categoria_servicio': self.categoria.pk,
+            'contacto': 'Contacto de prueba',
+            'items': [{'descripcion': 'Instalación', 'cantidad': 1, 'precio_unitario': 500000}],
+        }, format='json')
+        self.assertEqual(creado.status_code, 201, creado.data)
+        self.assertIsNone(creado.data['costo_base'])
+        ruta = f"/api/presupuestos/{creado.data['id']}/"
+        cambio = self.api.patch(ruta, {
+            'margen_objetivo': '20.00', 'contingencia_porcentaje': '10.00',
+        }, format='json')
+        self.assertEqual(cambio.status_code, 400, cambio.data)
+        self.assertEqual(self.api.get(ruta).data['monto_neto'], '500000')
+
     def test_guarda_borrador_sin_vencimiento_y_permite_quitarlo(self):
         self.autenticar(self.finanzas)
         creado = self.api.post('/api/presupuestos/', {
@@ -343,10 +392,15 @@ class ObraWorkflowTests(FyagAPITestCase):
     def test_finalizar_obra_no_depende_del_cobro_y_registra_historial(self):
         obra = self.crear_obra(tecnico=self.tecnico)
         self.crear_factura(obra)
+        CostoMaterial.objects.create(
+            obra=obra, categoria='MANO_DE_OBRA', descripcion='Instalación', monto=12000,
+            cantidad_real=1, unidad_real='h', costo_unitario_real=12000,
+        )
         self.autenticar(self.supervisor)
 
         response = self.api.post(
-            f'/api/obras/{obra.pk}/transicionar/', {'estado_operativo': 'finalizada'}, format='json',
+            f'/api/obras/{obra.pk}/transicionar/',
+            {'estado_operativo': 'finalizada', 'costos_confirmados': True}, format='json',
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -354,6 +408,12 @@ class ObraWorkflowTests(FyagAPITestCase):
         self.assertEqual(obra.estado_operativo, 'finalizada')
         self.assertEqual(obra.estado_comercial, 'pendiente_facturacion')
         self.assertEqual(obra.historial_estados.count(), 1)
+        nombre = self.supervisor.get_full_name() or self.supervisor.get_username()
+        Usuario.objects.filter(pk=self.supervisor.pk).update(rol='FINANZAS', first_name='Nombre actualizado')
+        historial = self.api.get(f'/api/obras/{obra.pk}/historial-estados/').data
+        self.assertEqual(historial[0]['usuario_nombre'], nombre)
+        self.assertEqual(historial[0]['usuario_rol_finalizacion'], 'SUPERVISOR')
+        self.assertEqual(historial[0]['usuario_rol_finalizacion_nombre'], 'Supervisor de Obras')
 
     def test_no_se_cancela_obra_con_factura_pendiente(self):
         obra = self.crear_obra(tecnico=self.tecnico)

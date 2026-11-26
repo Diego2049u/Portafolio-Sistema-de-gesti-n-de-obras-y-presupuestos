@@ -3,6 +3,7 @@ import { api } from '../api/client';
 
 const field = 'rounded bg-surface-container-low px-3 py-2';
 const numberFormat = new Intl.NumberFormat('es-CL', { maximumFractionDigits: 3 });
+const tiposMovimiento = { entrada: 'Entrada', consumo: 'Consumo', merma: 'Merma' };
 
 export function SelectorMateriales({ servicio, seleccion, onChange }) {
   const [catalogo, setCatalogo] = useState(null);
@@ -64,7 +65,7 @@ export function SelectorMateriales({ servicio, seleccion, onChange }) {
               onChange={(event) => onChange(seleccion.map((row) => row.material === item.material
                 ? { ...row, cantidad_planificada: event.target.value } : row))} />
           </label>
-          <button type="button" className="rounded px-2 py-2 text-error" aria-label={`Quitar ${material?.nombre}`}
+          <button type="button" className="link-action link-action-danger" aria-label={`Quitar ${material?.nombre}`}
             onClick={() => onChange(seleccion.filter((row) => row.material !== item.material))}>Quitar</button>
         </div>;
       })}
@@ -76,6 +77,7 @@ export function MaterialesObra({ obra, onClose, canRegisterWaste }) {
   const [rows, setRows] = useState(null);
   const [error, setError] = useState('');
   const [asignacion, setAsignacion] = useState(null);
+  const [tipo, setTipo] = useState('entrada');
   const [busy, setBusy] = useState(false);
   const path = `/obras/${obra.id}/materiales/`;
   const editable = canRegisterWaste && obra.estado_operativo === 'en-proceso' && obra.estado_comercial !== 'cerrada';
@@ -87,21 +89,32 @@ export function MaterialesObra({ obra, onClose, canRegisterWaste }) {
     return () => { active = false; };
   }, [path]);
 
-  async function guardarMerma(event) {
+  async function guardarMovimiento(event) {
     event.preventDefault();
-    const { cantidad, motivo } = Object.fromEntries(new FormData(event.currentTarget));
+    const { cantidad, motivo, referencia } = Object.fromEntries(new FormData(event.currentTarget));
     setBusy(true);
     setError('');
     try {
-      const merma = await api.request(`${path}${asignacion.id}/mermas/`, { method: 'POST', body: { cantidad, motivo } });
-      setRows((current) => current.map((row) => row.id === asignacion.id
-        ? { ...row, mermas: [merma, ...row.mermas] } : row));
+      const esMerma = tipo === 'merma';
+      const resultado = await api.request(`${path}${asignacion.id}/${esMerma ? 'mermas' : 'movimientos'}/`, {
+        method: 'POST', body: esMerma ? { cantidad, motivo } : { cantidad, motivo, tipo, referencia },
+      });
+      setRows((current) => current.map((row) => {
+        if (row.id !== asignacion.id) return row;
+        return esMerma ? { ...row, saldo: resultado.saldo, mermas: [resultado, ...row.mermas] } : resultado;
+      }));
       setAsignacion(null);
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy(false);
     }
+  }
+
+  function abrirMovimiento(row, nuevoTipo) {
+    setAsignacion(row);
+    setTipo(nuevoTipo);
+    setError('');
   }
 
   return (
@@ -121,16 +134,32 @@ export function MaterialesObra({ obra, onClose, canRegisterWaste }) {
               <h3 className="font-semibold">{row.material.nombre}</h3>
               <p>Planificado · {numberFormat.format(row.cantidad_planificada)} {row.material.unidad}</p>
             </div>
-            {editable && <button type="button" className="text-primary" disabled={busy} onClick={() => setAsignacion(row)}>Registrar merma</button>}
+            {editable && <div className="flex flex-wrap gap-3 text-sm">
+              <button type="button" className="link-action" disabled={busy} onClick={() => abrirMovimiento(row, 'entrada')}>Registrar entrada</button>
+              {Number(row.saldo) > 0 && <button type="button" className="link-action" disabled={busy} onClick={() => abrirMovimiento(row, 'consumo')}>Registrar consumo</button>}
+              {(row.saldo === null || Number(row.saldo) > 0) && <button type="button" className="link-action" disabled={busy} onClick={() => abrirMovimiento(row, 'merma')}>Registrar merma</button>}
+            </div>}
           </div>
+          <p className="mt-2 font-semibold">Saldo registrado · {row.saldo === null
+            ? 'Sin entradas registradas' : `${numberFormat.format(row.saldo)} ${row.material.unidad}`}</p>
           <p className="mt-2 font-medium">Merma registrada · {numberFormat.format(row.mermas.reduce((total, entry) => total + Number(entry.cantidad), 0))} {row.material.unidad}</p>
           {row.mermas.length > 0 && <ul className="mt-1 space-y-1 text-sm">
             {row.mermas.map((entry) => <li key={entry.id}>{entry.fecha} · {numberFormat.format(entry.cantidad)} {row.material.unidad} · {entry.motivo}</li>)}
           </ul>}
-          {editable && asignacion?.id === row.id && <form className="mt-3 space-y-2" onSubmit={guardarMerma}>
+          {row.movimientos.length > 0 && <ul className="mt-2 space-y-1 text-sm" aria-label="Entradas y consumos">
+            {row.movimientos.map((entry) => <li key={entry.id}>
+              {tiposMovimiento[entry.tipo]} · {new Date(entry.fecha).toLocaleString('es-CL')} · {numberFormat.format(entry.cantidad)} {row.material.unidad} · {entry.motivo}
+              {entry.referencia && <> · Ref. {entry.referencia}</>}
+            </li>)}
+          </ul>}
+          {editable && asignacion?.id === row.id && <form key={tipo} className="mt-3 space-y-2" onSubmit={guardarMovimiento}>
+            <h4 className="font-semibold">{tiposMovimiento[tipo]}</h4>
+            {tipo === 'entrada' && row.saldo === null && <p className="text-sm">Para iniciar el saldo, ingresa la cantidad disponible hoy más las mermas ya registradas.</p>}
             <label className="block">Cantidad ({row.material.unidad})<input className={field + ' block w-full'} name="cantidad" type="number" min="0.001" max="999999999.999" step="0.001" required /></label>
             <label className="block">Motivo<input className={field + ' block w-full'} name="motivo" maxLength={255} required /></label>
-            <button className="rounded bg-primary-container px-3 py-2 text-on-primary" disabled={busy}>{busy ? 'Guardando…' : 'Guardar merma'}</button>
+            {tipo === 'entrada' && <label className="block">Referencia del despacho<input className={field + ' block w-full'}
+              name="referencia" maxLength={100} required placeholder="Guía, folio o referencia interna" /></label>}
+            <button className="rounded bg-primary-container px-3 py-2 text-on-primary" disabled={busy}>{busy ? 'Guardando…' : 'Guardar movimiento'}</button>
             <button type="button" className="px-3 py-2" disabled={busy} onClick={() => setAsignacion(null)}>Cancelar</button>
           </form>}
         </article>)}

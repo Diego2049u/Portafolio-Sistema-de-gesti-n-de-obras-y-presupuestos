@@ -45,6 +45,7 @@ function getErrorMessage(data, fallback) {
 
 async function readResponse(response) {
   if (response.status === 204) return null;
+  if (response.status >= 500) return null;
   const contentType = response.headers.get('content-type') || '';
   if (contentType.includes('application/json')) {
     try {
@@ -130,7 +131,9 @@ async function sendRequest(path, options = {}, { mayRefresh = true, csrfRetry = 
 
   const data = await readResponse(response);
   if (!response.ok) {
-    const message = getErrorMessage(data, `La solicitud falló (${response.status}).`);
+    const message = response.status >= 500
+      ? 'El servidor no pudo completar la solicitud. Intenta nuevamente.'
+      : getErrorMessage(data, `La solicitud falló (${response.status}).`);
     if (response.status === 403 && csrfRetry && /csrf/i.test(message)) {
       csrfToken = null;
       await fetchCsrfToken();

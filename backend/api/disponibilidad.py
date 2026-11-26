@@ -13,6 +13,7 @@ from .models import Obra, Usuario
 
 CHILE = ZoneInfo('America/Santiago')
 TURNOS = ((time(8), time(13)), (time(14), time(18)))
+MAX_DIAS_PLANIFICACION = 367
 
 
 def franjas(inicio, fin):
@@ -25,6 +26,8 @@ def franjas(inicio, fin):
                 b = min(fin, datetime.combine(dia, hasta, CHILE))
                 if a < b:
                     yield a, b
+        if dia == fin.date():
+            break
         dia += timedelta(days=1)
 
 
@@ -33,7 +36,13 @@ def validar_rango(inicio, fin):
         raise ValidationError({'planificacion': 'Indique inicio y término estimado con fecha y hora.'})
     if inicio >= fin:
         raise ValidationError({'planificacion': 'El término estimado debe ser posterior al inicio.'})
-    if not next(franjas(inicio, fin), None):
+    if (fin - inicio) > timedelta(days=MAX_DIAS_PLANIFICACION):
+        raise ValidationError({'planificacion': 'La planificación admite un máximo de 367 días.'})
+    try:
+        primera_franja = next(franjas(inicio, fin), None)
+    except OverflowError as exc:
+        raise ValidationError({'planificacion': 'Las fechas están fuera del calendario admitido.'}) from exc
+    if not primera_franja:
         raise ValidationError({'planificacion': 'El período debe incluir horas laborales de lunes a viernes, de 08:00 a 13:00 o de 14:00 a 18:00.'})
 
 

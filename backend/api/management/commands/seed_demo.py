@@ -104,8 +104,8 @@ class Command(BaseCommand):
             tecnico_1, categorias['Climatización'], 100, supervisor,
         )
         self._crear_costos(obra_1, supervisor, [
-            ('MATERIALES', Decimal('1850000'), 'Insumos de ductería y aislación'),
-            ('MANO_DE_OBRA', Decimal('2400000'), 'Cuadrilla de instalación (12 días)'),
+            ('MATERIALES', Decimal('1850000'), 'Insumos de ductería y aislación', 100, 'm'),
+            ('MANO_DE_OBRA', Decimal('2400000'), 'Cuadrilla de instalación (12 días)', 96, 'h'),
         ])
         self._finalizar(obra_1, supervisor)
         factura_1 = self._crear_factura(
@@ -148,8 +148,9 @@ class Command(BaseCommand):
             tecnico_2, categorias['Proyecto eléctrico'], 100, supervisor,
         )
         self._crear_costos(obra_3, supervisor, [
-            ('MATERIALES', Decimal('1450000'), 'Tablero, cables y canalizaciones'),
+            ('MATERIALES', Decimal('1450000'), 'Tablero, cables y canalizaciones', 1, 'lote'),
             ('SUBCONTRATO', Decimal('780000'), 'Instalación eléctrica autorizada'),
+            ('MANO_DE_OBRA', Decimal('60000'), 'Supervisión técnica', 4, 'h'),
         ])
         self._finalizar(obra_3, supervisor)
         factura_2 = self._crear_factura(
@@ -360,7 +361,13 @@ class Command(BaseCommand):
         if obra.costos.exists():
             self.stdout.write(f'  = costos de {obra.codigo_obra} ya existen')
             return
-        for categoria, monto, descripcion in costos:
+        for categoria, monto, descripcion, *desglose in costos:
+            datos_reales = {}
+            if desglose:
+                cantidad, unidad = desglose
+                datos_reales = {
+                    'cantidad_real': cantidad, 'unidad_real': unidad, 'costo_unitario_real': monto / cantidad,
+                }
             CostoMaterial.objects.create(
                 obra=obra,
                 categoria=categoria,
@@ -368,13 +375,14 @@ class Command(BaseCommand):
                 descripcion=descripcion,
                 created_by=autor,
                 updated_by=autor,
+                **datos_reales,
             )
         self.stdout.write(f'  + {len(costos)} costo(s) en {obra.codigo_obra}')
 
     def _finalizar(self, obra, autor):
         if obra.estado_operativo == 'finalizada':
             return
-        transicionar_obra(obra, 'finalizada', autor)
+        transicionar_obra(obra, 'finalizada', autor, costos_confirmados=True)
         self.stdout.write(f'  + obra {obra.codigo_obra} finalizada')
 
     # ------------------------------------------------------------- facturación

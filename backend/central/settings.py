@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from pathlib import Path
 import os
 from datetime import timedelta
+import dj_database_url
 from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -92,6 +93,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'api.audit_context.AuditContextMiddleware',
@@ -160,16 +162,22 @@ if FYAG_TRUST_PROXY_HEADERS:
 
 # Configuración Base de Datos PostgreSQL
 
-DATABASES = {
-    'default': {
+database_url = os.environ.get('DATABASE_URL', '').strip()
+if env_bool('RENDER') and not database_url:
+    raise ImproperlyConfigured('Define DATABASE_URL en el servicio de Render.')
+
+if database_url:
+    database = dj_database_url.parse(database_url)
+else:
+    database = {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'fyag_erp_db',
-        'USER': 'postgres',
-        'PASSWORD': '12345678', # Momentanea ante cambio seguro a futuro
-        'HOST': 'localhost',
-        'PORT': '5432',
+        'NAME': os.environ.get('FYAG_DB_NAME', 'fyag_erp_db'),
+        'USER': os.environ.get('FYAG_DB_USER', 'postgres'),
+        'PASSWORD': os.environ.get('FYAG_DB_PASSWORD', ''),
+        'HOST': os.environ.get('FYAG_DB_HOST', 'localhost'),
+        'PORT': os.environ.get('FYAG_DB_PORT', '5432'),
     }
-}
+DATABASES = {'default': database}
 
 AUTH_USER_MODEL = 'api.Usuario'
 
@@ -209,6 +217,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field

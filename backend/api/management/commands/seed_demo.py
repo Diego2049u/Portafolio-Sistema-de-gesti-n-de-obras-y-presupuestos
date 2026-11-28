@@ -15,9 +15,10 @@ propio superusuario.
 from datetime import timedelta
 from decimal import Decimal
 from io import StringIO
+import os
 
 from django.core.management import call_command
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
 
@@ -66,13 +67,17 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument(
             '--password',
-            default=CLAVE_POR_DEFECTO,
-            help=f'Clave para los usuarios demo (por defecto: {CLAVE_POR_DEFECTO})',
+            default=None,
+            help='Clave para los usuarios demo. También puedes definir FYAG_DEMO_PASSWORD.',
         )
 
     @transaction.atomic
     def handle(self, *args, **options):
-        self.password = options['password']
+        self.password = options['password'] or os.environ.get('FYAG_DEMO_PASSWORD')
+        if not self.password:
+            if os.environ.get('RENDER') == 'true':
+                raise CommandError('Define FYAG_DEMO_PASSWORD para cargar la demo en Render.')
+            self.password = CLAVE_POR_DEFECTO
         self.hoy = timezone.localdate()
 
         self.stdout.write(self.style.MIGRATE_HEADING('Datos demo FYAG'))
@@ -205,8 +210,8 @@ class Command(BaseCommand):
         self.stdout.write('')
         self.stdout.write(self.style.SUCCESS('Datos demo cargados.'))
         self.stdout.write('Login de la API con email + password en /api/auth/login/')
-        for email, nombre, _, _, _, rol in CUENTAS:
-            self.stdout.write(f'  - {email:<22} {rol:<10} clave: {self.password}')
+        for email, _, _, _, _, rol in CUENTAS:
+            self.stdout.write(f'  - {email:<22} {rol}')
         self.stdout.write('')
         self.stdout.write('Presupuestos demo: PRE-2026-900001 .. PRE-2026-900007')
         self.stdout.write('Obras demo: OBR-2026-900001, OBR-2026-900002, OBR-2026-900003')
